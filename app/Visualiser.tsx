@@ -162,6 +162,14 @@ export function Visualiser() {
     setLiveStatus("loading");
     setCatalogueError("");
     try {
+      if (
+        typeof window !== "undefined" &&
+        window.location.hostname.endsWith("github.io")
+      ) {
+        throw new Error(
+          "This GitHub Pages preview cannot run the live catalogue server. The source remains Google Sheets, and no stored rows have been substituted.",
+        );
+      }
       const response = await fetch("/api/catalogue", {
         cache: "no-store",
         headers: { accept: "application/json" },
@@ -959,8 +967,8 @@ export function Visualiser() {
           go("start");
         }}>
           <picture>
-            <source media="(max-width: 480px)" srcSet="/branding/UpholsteryHubIcon.png" />
-            <img className="brand-logo" src="/branding/UpholsteryHubLogo-Horizontal.png" alt="" />
+            <source media="(max-width: 480px)" srcSet="branding/UpholsteryHubIcon.png" />
+            <img className="brand-logo" src="branding/UpholsteryHubLogo-Horizontal.png" alt="" />
           </picture>
         </a>
         <span className="pilot-chip">Customer pilot</span>
