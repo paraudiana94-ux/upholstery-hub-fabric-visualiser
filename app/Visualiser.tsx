@@ -136,6 +136,7 @@ export function Visualiser() {
   const [generatedPreview, setGeneratedPreview] =
     useState<GeneratedPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
+  const [customerNotes, setCustomerNotes] = useState("");
   const [reconciliationNotice, setReconciliationNotice] = useState("");
 
   const mainHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -463,6 +464,7 @@ export function Visualiser() {
     setStockFilter("");
     setFailedSwatches(new Set());
     setFormError("");
+    setCustomerNotes("");
     setReconciliationNotice("");
     Object.keys(window.sessionStorage)
       .filter((key) => key.startsWith("uh-"))
@@ -478,6 +480,20 @@ export function Visualiser() {
     clearJourneyState();
     window.location.hash = "#/start";
     window.location.reload();
+  }
+
+  function printProjectSummary() {
+    const previousTitle = document.title;
+    const fabricReference = selectedFabric?.id ?? "selection";
+    document.title = `Upholstery Hub project summary - ${fabricReference}`;
+    window.addEventListener(
+      "afterprint",
+      () => {
+        document.title = previousTitle;
+      },
+      { once: true },
+    );
+    window.print();
   }
 
   function markSwatchFailed(id: string) {
@@ -588,7 +604,7 @@ export function Visualiser() {
               Start visualising
             </button>
             <button className="button button-light button-large" type="button" onClick={() => go("quote")}>
-              Request a professional quote
+              Prepare a project summary
             </button>
           </div>
           <p className="trust-line">
@@ -1040,7 +1056,7 @@ export function Visualiser() {
           </div>
         </div>
         <div className="page-actions page-actions-prominent">
-          <button className="button button-dark button-large" type="button" onClick={() => go("quote")}>Request a professional quote</button>
+          <button className="button button-dark button-large" type="button" onClick={() => go("quote")}>View &amp; save project summary</button>
           <button className="button button-light" type="button" onClick={() => {
             clearGeneratedPreview();
             go("fabrics");
@@ -1052,34 +1068,107 @@ export function Visualiser() {
   }
 
   function renderQuote() {
+    const hasCompleteSummary = Boolean(selectedFurniture && selectedFabric && estimate);
+    const preparedOn = new Intl.DateTimeFormat("en-IE", {
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+    }).format(new Date());
+
     return (
       <section className="quote-layout" aria-labelledby="quote-heading">
-        <div>
+        <div className="summary-controls">
           <span className="eyebrow">Professional next step</span>
-          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>Bring your selection to Upholstery Hub</h1>
-          <p className="lede">A physical inspection is needed to confirm suitability, fabric quantity, repairs, price and turnaround.</p>
-          <div className="state-panel state-panel-warning">
-            <span className="status-dot status-dot-warning" aria-hidden="true" />
-            <div>
-              <strong>Verified quotation route not supplied</strong>
-              <p>This prototype cannot send a request yet. No photograph, contact details or quote request has been transmitted.</p>
+          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>View &amp; save your project summary</h1>
+          <p className="lede">
+            Add an optional note, then print this page or choose “Save as PDF” in your browser’s print window.
+          </p>
+          {!hasCompleteSummary ? (
+            <div className="state-panel state-panel-warning" role="status">
+              <span className="status-dot status-dot-warning" aria-hidden="true" />
+              <div>
+                <strong>Complete a live selection first</strong>
+                <p>Choose a furniture type and fabric to create a printable project summary.</p>
+                <button className="button button-dark" type="button" onClick={() => go("photo")}>
+                  Start visualising
+                </button>
+              </div>
             </div>
+          ) : null}
+          <div className="notes-field">
+            <label htmlFor="customer-notes"><strong>Notes for your consultation</strong> <small>Optional</small></label>
+            <textarea
+              id="customer-notes"
+              value={customerNotes}
+              maxLength={600}
+              rows={6}
+              disabled={!hasCompleteSummary}
+              aria-describedby="customer-notes-help customer-notes-count"
+              placeholder="For example: keep the existing piping, discuss firmer seat filling, or check collection options."
+              onChange={(event) => setCustomerNotes(event.target.value)}
+            />
           </div>
+          <div className="notes-meta">
+            <span id="customer-notes-help">Notes stay in this browser and appear only in your printed or saved copy.</span>
+            <span id="customer-notes-count">{customerNotes.length} / 600</span>
+          </div>
+          <button
+            className="button button-dark button-large button-full"
+            type="button"
+            disabled={!hasCompleteSummary}
+            onClick={printProjectSummary}
+          >
+            Print or save as PDF
+          </button>
+          <p className="field-help">In the print window, select “Save as PDF” to download a copy.</p>
           <div className="page-actions page-actions-left">
-            {estimate ? <button className="button button-dark" type="button" onClick={() => go("result")}>Review my estimate</button> : null}
+            {estimate ? <button className="button button-light" type="button" onClick={() => go("result")}>Back to estimate</button> : null}
             <button className="button button-light" type="button" onClick={resetJourney}>Start a new selection</button>
           </div>
         </div>
-        <aside className="quote-summary" aria-label="Quotation preparation summary">
-          <span className="eyebrow">Prepared summary</span>
-          <h2>Your current direction</h2>
+        <aside className="quote-summary" aria-label="Printable project summary">
+          <div className="summary-document-header">
+            <img src="branding/UpholsteryHubLogo-Horizontal.png" alt="Upholstery Hub" />
+            <div>
+              <span className="eyebrow">Project summary</span>
+              <small>Prepared {preparedOn}</small>
+            </div>
+          </div>
+          {generatedPreview ? (
+            <figure className="summary-media">
+              <img src={generatedPreview.imageDataUrl} alt={`AI-generated indicative preview of ${selectedFurniture?.name ?? "furniture"} in ${selectedFabric?.name ?? "the selected fabric"}`} />
+              <figcaption>AI-generated indicative preview</figcaption>
+            </figure>
+          ) : selectedFabric ? (
+            <figure className="summary-media summary-media-swatch">
+              <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name} live fabric swatch`} />
+              <figcaption>Selected live fabric swatch</figcaption>
+            </figure>
+          ) : null}
+          <h2>Your selected direction</h2>
           <dl>
             <div><dt>Furniture</dt><dd>{selectedFurniture ? `${selectedFurniture.name} × ${quantity}` : "Not selected"}</dd></div>
             <div><dt>Fabric</dt><dd>{selectedFabric ? `${selectedFabric.name} (${selectedFabric.id})` : "Not selected"}</dd></div>
+            <div><dt>Pattern and material</dt><dd>{selectedFabric ? `${selectedFabric.pattern} · ${selectedFabric.material}` : "Not selected"}</dd></div>
+            <div><dt>Stock status</dt><dd>{selectedFabric?.stockStatus ?? "Unavailable"}</dd></div>
             <div><dt>Estimate</dt><dd>{estimate ? `${currency.format(estimate.low)} to ${currency.format(estimate.high)}` : "Unavailable"}</dd></div>
+            <div><dt>Estimated fabric</dt><dd>{selectedFurniture ? `${selectedFurniture.minMetres} to ${selectedFurniture.maxMetres} m per item` : "Unavailable"}</dd></div>
+            <div><dt>Indicative turnaround</dt><dd>{selectedFurniture ? `${selectedFurniture.minTurnaroundWeeks} to ${selectedFurniture.maxTurnaroundWeeks} weeks` : "Unavailable"}</dd></div>
             <div><dt>AI preview</dt><dd>{generatedPreview ? "Generated — indicative only" : "Not generated"}</dd></div>
           </dl>
-          <p>This summary remains in this browser session. It has not been submitted anywhere.</p>
+          {customerNotes.trim() ? (
+            <div className="summary-notes">
+              <strong>Consultation notes</strong>
+              <p>{customerNotes.trim()}</p>
+            </div>
+          ) : null}
+          <div className="summary-disclaimer">
+            <strong>This project summary is not a quotation.</strong>
+            <p>
+              Screen colour, AI output and estimates are indicative. Upholstery Hub must inspect the furniture and confirm fabric suitability, quantity, repairs, price and turnaround.
+            </p>
+          </div>
+          <p className="summary-privacy">This summary has not been emailed or submitted. It remains in this browser unless you print or save it.</p>
         </aside>
       </section>
     );

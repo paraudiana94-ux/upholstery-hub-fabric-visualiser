@@ -276,6 +276,24 @@ test("testing quota and logo reset stay aligned across server and client", async
   assert.match(readme, /allows 10 preview attempts per source IP per hour/);
 });
 
+test("project summary is local, printable and truthfully labelled", async () => {
+  const [visualiserSource, css, readme] = await Promise.all([
+    readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(visualiserSource, /View &amp; save project summary/);
+  assert.match(visualiserSource, /Print or save as PDF/);
+  assert.match(visualiserSource, /window\.print\(\)/);
+  assert.match(visualiserSource, /maxLength=\{600\}/);
+  assert.match(visualiserSource, /has not been emailed or submitted/);
+  assert.match(css, /@media print/);
+  assert.match(css, /size: A4 portrait/);
+  assert.match(css, /\.summary-controls[\s\S]*display: none !important/);
+  assert.match(readme, /native print dialog to print or save a polished PDF summary/);
+});
+
 test("deterministic Armchair pricing matches the approved reversible test", () => {
   assert.deepEqual(
     calculateIndicativeEstimate({
