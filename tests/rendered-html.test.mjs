@@ -494,7 +494,7 @@ test("testing quota and approved Home and Start Again behaviour stay aligned", a
   assert.match(previewSource, /RATE_LIMIT_REQUESTS = 10/);
   assert.match(previewSource, /allows 10 AI previews per hour/);
   assert.match(visualiserSource, /limits each visitor to 10 previews per hour/);
-  assert.match(visualiserSource, /function goHome\(\)/);
+  assert.match(visualiserSource, /function goHome\(trigger\?: HTMLElement\)/);
   assert.match(visualiserSource, /function requestJourneyReset\(trigger: HTMLElement\)/);
   assert.match(visualiserSource, /key\.startsWith\("uh-"\)/);
   assert.match(visualiserSource, /Continue your selection/);
@@ -522,7 +522,7 @@ test("iteration two navigation is destination-specific, editable and safe", asyn
   assert.match(visualiserSource, /complete && !current/);
   assert.match(visualiserSource, /className="progress-step-button"/);
   assert.match(visualiserSource, /aria-label=\{`Edit \$\{item\.label\.toLowerCase\(\)\} step`\}/);
-  assert.match(visualiserSource, /onClick=\{\(\) => go\(item\.id\)\}/);
+  assert.match(visualiserSource, /navigateToCompletedStep\(item\.id, event\.currentTarget\)/);
   assert.match(visualiserSource, /className="progress-step-static"/);
   assert.match(visualiserSource, /aria-current=\{current \? "step" : undefined\}/);
   assert.match(visualiserSource, /window\.history\.pushState/);
@@ -532,6 +532,31 @@ test("iteration two navigation is destination-specific, editable and safe", asyn
   assert.match(css, /\.progress-step-button,[\s\S]*min-height: 61px/);
   assert.match(css, /\.step-navigation \.navigation-primary[\s\S]*order: 1/);
   assert.match(css, /\.step-navigation \.navigation-back[\s\S]*order: 2/);
+});
+
+test("iteration three keeps completion persistent and applies staged edits explicitly", async () => {
+  const [visualiserSource, css] = await Promise.all([
+    readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(visualiserSource, /const \[completedSteps, setCompletedSteps\]/);
+  assert.match(visualiserSource, /const complete = completedSteps\.has\(item\.id\)/);
+  assert.doesNotMatch(visualiserSource, /const complete = index < progressIndex/);
+  assert.match(visualiserSource, /"uh-completed-steps"/);
+  assert.match(visualiserSource, /draftFurnitureId !== selectedFurnitureId/);
+  assert.match(visualiserSource, /draftFabricId !== selectedFabricId/);
+  assert.match(visualiserSource, /draftQuantity !== quantity/);
+  assert.match(visualiserSource, /Apply photo change/);
+  assert.match(visualiserSource, /Apply furniture changes/);
+  assert.match(visualiserSource, /Apply fabric change/);
+  assert.match(visualiserSource, /Leave without applying changes\?/);
+  assert.match(visualiserSource, /Your changes on this step have not been applied\./);
+  assert.match(visualiserSource, /Keep editing/);
+  assert.match(visualiserSource, /Discard changes/);
+  assert.match(visualiserSource, /addEventListener\("beforeunload", warnBeforeLeaving\)/);
+  assert.match(css, /\.progress-dirty/);
+  assert.match(css, /\.unsaved-note/);
 });
 
 test("furniture photo checking is consent-gated and offers a mismatch correction", async () => {

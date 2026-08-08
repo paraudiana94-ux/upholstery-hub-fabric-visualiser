@@ -92,6 +92,14 @@ const progressSteps = [
   { id: "review", label: "Review" },
 ] as const;
 
+type ProgressStepId = (typeof progressSteps)[number]["id"];
+type EditableStep = Exclude<ProgressStepId, "review">;
+
+interface PendingNavigation {
+  next: Step;
+  returnAfterApply?: Step | null;
+}
+
 const currency = new Intl.NumberFormat("en-IE", {
   style: "currency",
   currency: "EUR",
@@ -155,25 +163,37 @@ export function Visualiser() {
     "loading",
   );
   const [localPhoto, setLocalPhoto] = useState<LocalPhoto | null>(null);
+  const [draftPhoto, setDraftPhoto] = useState<LocalPhoto | null>(null);
   const [photoError, setPhotoError] = useState("");
   const [photoInputKey, setPhotoInputKey] = useState(0);
   const [selectedFurnitureId, setSelectedFurnitureId] = useState("");
+  const [draftFurnitureId, setDraftFurnitureId] = useState("");
   const [selectedFabricId, setSelectedFabricId] = useState("");
+  const [draftFabricId, setDraftFabricId] = useState("");
   const [quantity, setQuantity] = useState(1);
+  const [draftQuantity, setDraftQuantity] = useState(1);
   const [colourFilter, setColourFilter] = useState("");
   const [patternFilter, setPatternFilter] = useState("");
   const [stockFilter, setStockFilter] = useState("");
   const [failedSwatches, setFailedSwatches] = useState<Set<string>>(new Set());
   const [formError, setFormError] = useState("");
   const [aiAcknowledged, setAiAcknowledged] = useState(false);
+  const [draftAiAcknowledged, setDraftAiAcknowledged] = useState(false);
   const [furnitureCheckStatus, setFurnitureCheckStatus] =
     useState<FurnitureCheckStatus>("idle");
+  const [draftFurnitureCheckStatus, setDraftFurnitureCheckStatus] =
+    useState<FurnitureCheckStatus>("idle");
   const [furnitureCheckError, setFurnitureCheckError] = useState("");
+  const [draftFurnitureCheckError, setDraftFurnitureCheckError] = useState("");
   const [furniturePhotoClassification, setFurniturePhotoClassification] =
+    useState<FurniturePhotoClassification | null>(null);
+  const [draftFurniturePhotoClassification, setDraftFurniturePhotoClassification] =
     useState<FurniturePhotoClassification | null>(null);
   const [furnitureSelectionAlert, setFurnitureSelectionAlert] =
     useState<FurnitureSelectionAlert | null>(null);
   const [furnitureSelectionOverride, setFurnitureSelectionOverride] =
+    useState<FurnitureSelectionOverride | null>(null);
+  const [draftFurnitureSelectionOverride, setDraftFurnitureSelectionOverride] =
     useState<FurnitureSelectionOverride | null>(null);
   const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
   const [showOverrideConfirmation, setShowOverrideConfirmation] = useState(false);
@@ -184,16 +204,53 @@ export function Visualiser() {
   const [customerNotes, setCustomerNotes] = useState("");
   const [reconciliationNotice, setReconciliationNotice] = useState("");
   const [resumeStep, setResumeStep] = useState<Step | null>(null);
+  const [completedSteps, setCompletedSteps] = useState<Set<ProgressStepId>>(
+    new Set(),
+  );
+  const [editReturnStep, setEditReturnStep] = useState<Step | null>(null);
+  const [leaveDialogOpen, setLeaveDialogOpen] = useState(false);
+  const [pendingNavigation, setPendingNavigation] =
+    useState<PendingNavigation | null>(null);
   const [resetDialogOpen, setResetDialogOpen] = useState(false);
   const [storageReady, setStorageReady] = useState(false);
 
+  const photoDirty =
+    draftPhoto !== localPhoto || draftAiAcknowledged !== aiAcknowledged;
+  const furnitureOverrideDirty =
+    draftFurnitureSelectionOverride?.aiPrediction !==
+      furnitureSelectionOverride?.aiPrediction ||
+    draftFurnitureSelectionOverride?.customerSelection !==
+      furnitureSelectionOverride?.customerSelection;
+  const furnitureDirty =
+    draftFurnitureId !== selectedFurnitureId ||
+    draftQuantity !== quantity ||
+    furnitureOverrideDirty;
+  const fabricDirty = draftFabricId !== selectedFabricId;
+  const dirtyStep: EditableStep | null =
+    step === "photo" && photoDirty
+      ? "photo"
+      : step === "furniture" && furnitureDirty
+        ? "furniture"
+        : step === "fabrics" && fabricDirty
+          ? "fabrics"
+          : null;
+
   const mainHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorSummaryRef = useRef<HTMLDivElement>(null);
+  const leaveDialogRef = useRef<HTMLDialogElement>(null);
+  const leaveSafeButtonRef = useRef<HTMLButtonElement>(null);
+  const leaveReturnFocusRef = useRef<HTMLElement | null>(null);
   const resetDialogRef = useRef<HTMLDialogElement>(null);
   const resetSafeButtonRef = useRef<HTMLButtonElement>(null);
   const resetReturnFocusRef = useRef<HTMLElement | null>(null);
   const resetDialogOpenRef = useRef(false);
   const resetHistoryEntryRef = useRef(false);
+  const stepRef = useRef<Step>(step);
+  const dirtyStepRef = useRef<EditableStep | null>(dirtyStep);
+  const navigationBypassRef = useRef(false);
+
+  stepRef.current = step;
+  dirtyStepRef.current = dirtyStep;
 
   const loadCatalogue = useCallback(async () => {
     setLiveStatus("loading");
@@ -230,7 +287,25 @@ export function Visualiser() {
 
   useEffect(() => {
     const initialSync = window.setTimeout(() => setStep(getStepFromHash()), 0);
-    const onHashChange = () => setStep(getStepFromHash());
+    const onHashChange = () => {
+      const next = getStepFromHash();
+      if (navigationBypassRef.current) {
+        navigationBypassRef.current = false;
+        setStep(next);
+        return;
+      }
+      if (dirtyStepRef.current && next !== stepRef.current) {
+        window.history.pushState(
+          { ...(typeof window.history.state === "object" ? window.history.state : {}), upholsteryDraftGuard: true },
+          "",
+          `#/${stepRef.current}`,
+        );
+        setPendingNavigation({ next });
+        setLeaveDialogOpen(true);
+        return;
+      }
+      setStep(next);
+    };
     window.addEventListener("hashchange", onHashChange);
     return () => {
       window.clearTimeout(initialSync);
@@ -247,14 +322,40 @@ export function Visualiser() {
     const storedFurnitureId = getStoredValue("uh-furniture-id");
     const storedFabricId = getStoredValue("uh-fabric-id");
     const storedQuantity = Number(getStoredValue("uh-quantity", "1"));
+    const storedCompletedSteps = getStoredValue("uh-completed-steps");
     const restoreStoredSelection = window.setTimeout(() => {
       setSelectedFurnitureId(storedFurnitureId);
+      setDraftFurnitureId(storedFurnitureId);
       setSelectedFabricId(storedFabricId);
-      setQuantity(
+      setDraftFabricId(storedFabricId);
+      const restoredQuantity =
         Number.isInteger(storedQuantity) && storedQuantity >= 1 && storedQuantity <= 10
           ? storedQuantity
-          : 1,
-      );
+          : 1;
+      setQuantity(restoredQuantity);
+      setDraftQuantity(restoredQuantity);
+      try {
+        const parsed = JSON.parse(storedCompletedSteps) as unknown;
+        if (Array.isArray(parsed)) {
+          setCompletedSteps(
+            new Set(
+              parsed.filter((value): value is ProgressStepId =>
+                progressSteps.some((item) => item.id === value),
+              ),
+            ),
+          );
+        } else if (storedFabricId) {
+          setCompletedSteps(new Set(["photo", "furniture", "fabrics", "review"]));
+        } else if (storedFurnitureId) {
+          setCompletedSteps(new Set(["photo", "furniture"]));
+        }
+      } catch {
+        if (storedFabricId) {
+          setCompletedSteps(new Set(["photo", "furniture", "fabrics", "review"]));
+        } else if (storedFurnitureId) {
+          setCompletedSteps(new Set(["photo", "furniture"]));
+        }
+      }
       setStorageReady(true);
     }, 0);
     return () => window.clearTimeout(restoreStoredSelection);
@@ -265,6 +366,19 @@ export function Visualiser() {
       mainHeadingRef.current?.focus();
     }
   }, [step]);
+
+  useEffect(() => {
+    const dialog = leaveDialogRef.current;
+    if (!dialog) {
+      return;
+    }
+    if (leaveDialogOpen && !dialog.open) {
+      dialog.showModal();
+      leaveSafeButtonRef.current?.focus();
+    } else if (!leaveDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [leaveDialogOpen]);
 
   useEffect(() => {
     const dialog = resetDialogRef.current;
@@ -294,6 +408,18 @@ export function Visualiser() {
   }, []);
 
   useEffect(() => {
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      if (!dirtyStepRef.current) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, []);
+
+  useEffect(() => {
     if (selectedFurnitureId) {
       window.sessionStorage.setItem("uh-furniture-id", selectedFurnitureId);
     } else {
@@ -318,6 +444,16 @@ export function Visualiser() {
   }, [quantity]);
 
   useEffect(() => {
+    if (!storageReady) {
+      return;
+    }
+    window.sessionStorage.setItem(
+      "uh-completed-steps",
+      JSON.stringify(Array.from(completedSteps)),
+    );
+  }, [completedSteps, storageReady]);
+
+  useEffect(() => {
     if (!catalogue) {
       return;
     }
@@ -329,10 +465,21 @@ export function Visualiser() {
         !catalogue.furniture.some((item) => item.id === selectedFurnitureId)
       ) {
         setSelectedFurnitureId("");
+        setDraftFurnitureId("");
+        setSelectedFabricId("");
+        setDraftFabricId("");
         setFurnitureSelectionOverride(null);
+        setDraftFurnitureSelectionOverride(null);
         clearGeneratedPreview();
         notices.push("This item is no longer available. Choose another option before continuing.");
         invalidStep = "furniture";
+        setCompletedSteps((current) => {
+          const next = new Set(current);
+          next.delete("furniture");
+          next.delete("fabrics");
+          next.delete("review");
+          return next;
+        });
       }
       if (
         selectedFabricId &&
@@ -342,9 +489,16 @@ export function Visualiser() {
         )
       ) {
         setSelectedFabricId("");
+        setDraftFabricId("");
         clearGeneratedPreview();
         notices.push("This item is no longer available. Choose another option before continuing.");
         invalidStep ??= "fabrics";
+        setCompletedSteps((current) => {
+          const next = new Set(current);
+          next.delete("fabrics");
+          next.delete("review");
+          return next;
+        });
       }
       if (notices.length > 0) {
         setReconciliationNotice(notices.join(" "));
@@ -366,9 +520,16 @@ export function Visualiser() {
   const selectedFurniture = catalogue?.furniture.find(
     (item) => item.id === selectedFurnitureId,
   );
+  const draftFurniture = catalogue?.furniture.find(
+    (item) => item.id === draftFurnitureId,
+  );
   const selectedFabric = catalogue?.fabrics.find(
     (item) =>
       item.id === selectedFabricId && isAvailableStockStatus(item.stockStatus),
+  );
+  const draftFabric = catalogue?.fabrics.find(
+    (item) =>
+      item.id === draftFabricId && isAvailableStockStatus(item.stockStatus),
   );
 
   const estimate = useMemo(() => {
@@ -408,23 +569,108 @@ export function Visualiser() {
     [catalogue, colourFilter, patternFilter, stockFilter],
   );
 
-  const progressIndex = step === "result"
-    ? progressSteps.length - 1
-    : progressSteps.findIndex((item) => item.id === step);
-
   function go(next: Step) {
     setFormError("");
     const nextHash = `#/${next}`;
     if (window.location.hash === nextHash) {
       setStep(next);
     } else {
+      navigationBypassRef.current = true;
       window.location.hash = nextHash;
     }
+  }
+
+  function requestNavigation(
+    next: Step,
+    trigger?: HTMLElement,
+    returnAfterApply?: Step | null,
+  ) {
+    if (dirtyStep && next !== step) {
+      leaveReturnFocusRef.current = trigger ?? null;
+      setPendingNavigation({ next, returnAfterApply });
+      setLeaveDialogOpen(true);
+      return;
+    }
+    if (returnAfterApply !== undefined) {
+      setEditReturnStep(returnAfterApply);
+    }
+    go(next);
+  }
+
+  function navigateToCompletedStep(next: ProgressStepId, trigger: HTMLElement) {
+    const currentProgressStep: ProgressStepId | null =
+      step === "result" ? "review" : progressSteps.some((item) => item.id === step)
+        ? (step as ProgressStepId)
+        : null;
+    const currentIndex = currentProgressStep
+      ? progressSteps.findIndex((item) => item.id === currentProgressStep)
+      : -1;
+    const nextIndex = progressSteps.findIndex((item) => item.id === next);
+    const returnAfterApply =
+      currentProgressStep && nextIndex < currentIndex ? currentProgressStep : undefined;
+    requestNavigation(next, trigger, returnAfterApply);
   }
 
   function showFormError(message: string) {
     setFormError(message);
     window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
+  }
+
+  function markStepsComplete(...ids: ProgressStepId[]) {
+    setCompletedSteps((current) => {
+      const next = new Set(current);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  function discardDraft(stepToDiscard: EditableStep) {
+    if (stepToDiscard === "photo") {
+      if (draftPhoto && draftPhoto !== localPhoto) {
+        URL.revokeObjectURL(draftPhoto.url);
+      }
+      setDraftPhoto(localPhoto);
+      setDraftAiAcknowledged(aiAcknowledged);
+      setDraftFurnitureCheckStatus(furnitureCheckStatus);
+      setDraftFurnitureCheckError(furnitureCheckError);
+      setDraftFurniturePhotoClassification(furniturePhotoClassification);
+      setPhotoError("");
+    }
+    if (stepToDiscard === "furniture") {
+      setDraftFurnitureId(selectedFurnitureId);
+      setDraftQuantity(quantity);
+      setDraftFurnitureSelectionOverride(furnitureSelectionOverride);
+      setFurnitureSelectionAlert(null);
+      setOverrideAcknowledged(false);
+      setShowOverrideConfirmation(false);
+    }
+    if (stepToDiscard === "fabrics") {
+      setDraftFabricId(selectedFabricId);
+    }
+    setFormError("");
+  }
+
+  function keepEditing() {
+    setLeaveDialogOpen(false);
+    setPendingNavigation(null);
+    window.requestAnimationFrame(() => leaveReturnFocusRef.current?.focus());
+  }
+
+  function discardChangesAndLeave() {
+    const navigation = pendingNavigation;
+    const stepToDiscard = dirtyStep;
+    setLeaveDialogOpen(false);
+    setPendingNavigation(null);
+    if (stepToDiscard) {
+      discardDraft(stepToDiscard);
+    }
+    if (!navigation) {
+      return;
+    }
+    if (navigation.returnAfterApply !== undefined) {
+      setEditReturnStep(navigation.returnAfterApply);
+    }
+    go(navigation.next);
   }
 
   function clearGeneratedPreview() {
@@ -435,24 +681,42 @@ export function Visualiser() {
 
   function clearFurniturePhotoCheck() {
     setFurnitureCheckStatus("idle");
+    setDraftFurnitureCheckStatus("idle");
     setFurnitureCheckError("");
+    setDraftFurnitureCheckError("");
     setFurniturePhotoClassification(null);
+    setDraftFurniturePhotoClassification(null);
     setFurnitureSelectionAlert(null);
     setFurnitureSelectionOverride(null);
+    setDraftFurnitureSelectionOverride(null);
     setOverrideAcknowledged(false);
     setShowOverrideConfirmation(false);
     setAiAcknowledged(false);
+    setDraftAiAcknowledged(false);
   }
 
-  function removePhoto() {
-    if (localPhoto) {
-      URL.revokeObjectURL(localPhoto.url);
+  function clearAllPhotos() {
+    if (draftPhoto && draftPhoto !== localPhoto) {
+      URL.revokeObjectURL(draftPhoto.url);
     }
+    setDraftPhoto(null);
     setLocalPhoto(null);
     setPhotoError("");
     clearGeneratedPreview();
     clearFurniturePhotoCheck();
-    setSelectedFurnitureId("");
+    setPhotoInputKey((current) => current + 1);
+  }
+
+  function removeDraftPhoto() {
+    if (draftPhoto && draftPhoto !== localPhoto) {
+      URL.revokeObjectURL(draftPhoto.url);
+    }
+    setDraftPhoto(null);
+    setDraftAiAcknowledged(false);
+    setDraftFurnitureCheckStatus("idle");
+    setDraftFurnitureCheckError("");
+    setDraftFurniturePhotoClassification(null);
+    setPhotoError("");
     setPhotoInputKey((current) => current + 1);
   }
 
@@ -480,13 +744,14 @@ export function Visualiser() {
         image.onerror = () => reject(new Error("decode"));
         image.src = objectUrl;
       });
-      if (localPhoto) {
-        URL.revokeObjectURL(localPhoto.url);
+      if (draftPhoto && draftPhoto !== localPhoto) {
+        URL.revokeObjectURL(draftPhoto.url);
       }
-      setLocalPhoto({ url: objectUrl, name: file.name, size: file.size, file });
-      clearGeneratedPreview();
-      clearFurniturePhotoCheck();
-      setSelectedFurnitureId("");
+      setDraftPhoto({ url: objectUrl, name: file.name, size: file.size, file });
+      setDraftAiAcknowledged(false);
+      setDraftFurnitureCheckStatus("idle");
+      setDraftFurnitureCheckError("");
+      setDraftFurniturePhotoClassification(null);
     } catch {
       URL.revokeObjectURL(objectUrl);
       setPhotoError("We could not read this photo. Try another image.");
@@ -495,76 +760,147 @@ export function Visualiser() {
 
   async function continueFromPhoto() {
     setPhotoError("");
-    if (!localPhoto) {
-      clearFurniturePhotoCheck();
-      go("furniture");
+    const photoChanged = draftPhoto !== localPhoto;
+    if (!draftPhoto) {
+      if (photoChanged) {
+        setLocalPhoto(null);
+        setAiAcknowledged(false);
+        setFurnitureCheckStatus("idle");
+        setDraftFurnitureCheckStatus("idle");
+        setFurnitureCheckError("");
+        setDraftFurnitureCheckError("");
+        setFurniturePhotoClassification(null);
+        setDraftFurniturePhotoClassification(null);
+        setFurnitureSelectionOverride(null);
+        setDraftFurnitureSelectionOverride(null);
+        clearGeneratedPreview();
+      }
+      markStepsComplete("photo");
+      const destination =
+        editReturnStep && selectedFurniture && selectedFabric
+          ? editReturnStep
+          : "furniture";
+      setEditReturnStep(null);
+      go(destination);
       return;
     }
-    if (!aiAcknowledged) {
+    if (!draftAiAcknowledged) {
       setPhotoError(
         "Confirm that you have permission to use this photo before continuing with automatic furniture checking.",
       );
       return;
     }
-    if (furnitureCheckStatus === "ready" && furniturePhotoClassification) {
+    let nextStatus = draftFurnitureCheckStatus;
+    let nextError = draftFurnitureCheckError;
+    let nextClassification = draftFurniturePhotoClassification;
+
+    if (photoChanged || nextStatus !== "ready" || !nextClassification) {
+      setDraftFurnitureCheckStatus("checking");
+      setDraftFurnitureCheckError("");
+      setFurnitureSelectionAlert(null);
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 45_000);
+      const endpoint = window.location.hostname.endsWith("github.io")
+        ? "https://upholstery-hub-fabric-visualiser.onrender.com/api/furniture-check"
+        : "/api/furniture-check";
+      const body = new FormData();
+      body.append("photo", draftPhoto.file, draftPhoto.name);
+
+      try {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          body,
+          signal: controller.signal,
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | FurnitureCheckPayload
+          | null;
+        if (
+          !response.ok ||
+          !payload?.status ||
+          !payload.detectedFurnitureType ||
+          typeof payload.confidence !== "number" ||
+          !payload.model
+        ) {
+          throw new Error("photo-check-failed");
+        }
+        nextClassification = {
+          status: payload.status,
+          detectedFurnitureType: payload.detectedFurnitureType,
+          confidence: payload.confidence,
+          model: payload.model,
+        };
+        nextStatus = "ready";
+        nextError = "";
+      } catch {
+        nextClassification = null;
+        nextStatus = "error";
+        nextError =
+          "We couldn't analyse this photo. Try another photo or choose the furniture type yourself.";
+      } finally {
+        window.clearTimeout(timeout);
+      }
+      setDraftFurniturePhotoClassification(nextClassification);
+      setDraftFurnitureCheckStatus(nextStatus);
+      setDraftFurnitureCheckError(nextError);
+    }
+
+    setAiAcknowledged(draftAiAcknowledged);
+    setFurniturePhotoClassification(nextClassification);
+    setFurnitureCheckStatus(nextStatus);
+    setFurnitureCheckError(nextError);
+    if (photoChanged) {
+      setLocalPhoto(draftPhoto);
+      setFurnitureSelectionOverride(null);
+      setDraftFurnitureSelectionOverride(null);
+      clearGeneratedPreview();
+    }
+
+    markStepsComplete("photo");
+    const photoMismatch = Boolean(
+      photoChanged &&
+        nextClassification?.status === "identified" &&
+        selectedFurniture &&
+        nextClassification.detectedFurnitureType !== selectedFurniture.name,
+    );
+
+    if (photoMismatch && selectedFurniture && nextClassification) {
+      const previousFurniture = selectedFurniture;
+      setDraftFurnitureId(previousFurniture.id);
+      setSelectedFurnitureId("");
+      setFurnitureSelectionAlert({
+        kind: "mismatch",
+        selectedFurnitureId: previousFurniture.id,
+        selectedFurnitureName: previousFurniture.name,
+        detectedFurnitureType: nextClassification.detectedFurnitureType,
+        message: `The photo may show ${withArticle(nextClassification.detectedFurnitureType)}, but your applied selection was ${withArticle(previousFurniture.name)}. Confirm the furniture type before continuing.`,
+      });
+      setCompletedSteps((current) => {
+        const next = new Set(current);
+        next.delete("furniture");
+        next.delete("fabrics");
+        next.delete("review");
+        return next;
+      });
+      setReconciliationNotice(
+        "We saved your change. Please check the highlighted step because an earlier choice changed.",
+      );
+      setEditReturnStep(null);
       go("furniture");
       return;
     }
 
-    setFurnitureCheckStatus("checking");
-    setFurnitureCheckError("");
-    setFurnitureSelectionAlert(null);
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 45_000);
-    const endpoint = window.location.hostname.endsWith("github.io")
-      ? "https://upholstery-hub-fabric-visualiser.onrender.com/api/furniture-check"
-      : "/api/furniture-check";
-    const body = new FormData();
-    body.append("photo", localPhoto.file, localPhoto.name);
-
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        body,
-        signal: controller.signal,
-      });
-      const payload = (await response.json().catch(() => null)) as
-        | FurnitureCheckPayload
-        | null;
-      if (
-        !response.ok ||
-        !payload?.status ||
-        !payload.detectedFurnitureType ||
-        typeof payload.confidence !== "number" ||
-        !payload.model
-      ) {
-        throw new Error(
-          payload?.message ??
-            "We could not check this photo automatically. You can still choose a furniture type.",
-        );
-      }
-      setFurniturePhotoClassification({
-        status: payload.status,
-        detectedFurnitureType: payload.detectedFurnitureType,
-        confidence: payload.confidence,
-        model: payload.model,
-      });
-      setFurnitureCheckStatus("ready");
-    } catch {
-      setFurniturePhotoClassification(null);
-      setFurnitureCheckStatus("error");
-      setFurnitureCheckError(
-        "We couldn't analyse this photo. Try another photo or choose the furniture type yourself.",
-      );
-    } finally {
-      window.clearTimeout(timeout);
-    }
-    go("furniture");
+    const destination =
+      editReturnStep && selectedFurniture && selectedFabric
+        ? editReturnStep
+        : "furniture";
+    setEditReturnStep(null);
+    go(destination);
   }
 
   function acceptFurnitureSelection(item: FurnitureType, isOverride = false) {
-    setSelectedFurnitureId(item.id);
-    setFurnitureSelectionOverride(
+    setDraftFurnitureId(item.id);
+    setDraftFurnitureSelectionOverride(
       isOverride && furniturePhotoClassification
         ? {
             aiPrediction: furniturePhotoClassification.detectedFurnitureType,
@@ -576,7 +912,6 @@ export function Visualiser() {
     setOverrideAcknowledged(false);
     setShowOverrideConfirmation(false);
     setReconciliationNotice("");
-    clearGeneratedPreview();
     setFormError("");
   }
 
@@ -586,11 +921,10 @@ export function Visualiser() {
       return;
     }
 
-    setSelectedFurnitureId("");
-    setFurnitureSelectionOverride(null);
+    setDraftFurnitureId("");
+    setDraftFurnitureSelectionOverride(null);
     setOverrideAcknowledged(false);
     setShowOverrideConfirmation(false);
-    clearGeneratedPreview();
     setFormError("");
     if (furniturePhotoClassification.status === "uncertain") {
       setFurnitureSelectionAlert({
@@ -691,30 +1025,61 @@ export function Visualiser() {
   }
 
   function continueFromFurniture() {
-    if (!selectedFurniture) {
+    if (!draftFurniture) {
       showFormError("Choose one furniture type before continuing.");
       return;
     }
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 10) {
+    if (!Number.isInteger(draftQuantity) || draftQuantity < 1 || draftQuantity > 10) {
       showFormError("Enter a whole-number quantity from 1 to 10.");
       return;
     }
-    go("fabrics");
+    const changed = furnitureDirty;
+    setSelectedFurnitureId(draftFurniture.id);
+    setQuantity(draftQuantity);
+    setFurnitureSelectionOverride(draftFurnitureSelectionOverride);
+    markStepsComplete("furniture");
+    if (changed) {
+      clearGeneratedPreview();
+    }
+    const fabricStillAvailable = Boolean(
+      selectedFabricId &&
+        catalogue?.fabrics.some(
+          (item) =>
+            item.id === selectedFabricId && isAvailableStockStatus(item.stockStatus),
+        ),
+    );
+    const destination =
+      editReturnStep && fabricStillAvailable ? editReturnStep : "fabrics";
+    setEditReturnStep(null);
+    setReconciliationNotice("");
+    go(destination);
   }
 
   function continueFromFabrics() {
-    if (!selectedFabric) {
+    if (!draftFabric) {
       showFormError("Choose one live fabric before continuing.");
       return;
     }
-    go("review");
+    const changed = fabricDirty;
+    setSelectedFabricId(draftFabric.id);
+    markStepsComplete("fabrics", "review");
+    if (changed) {
+      clearGeneratedPreview();
+    }
+    const destination = editReturnStep ?? "review";
+    setEditReturnStep(null);
+    setReconciliationNotice("");
+    go(destination);
   }
 
   function clearJourneyState() {
-    removePhoto();
+    clearAllPhotos();
     setSelectedFurnitureId("");
+    setDraftFurnitureId("");
     setSelectedFabricId("");
+    setDraftFabricId("");
     setQuantity(1);
+    setDraftQuantity(1);
     setColourFilter("");
     setPatternFilter("");
     setStockFilter("");
@@ -723,6 +1088,8 @@ export function Visualiser() {
     setCustomerNotes("");
     setReconciliationNotice("");
     setResumeStep(null);
+    setEditReturnStep(null);
+    setCompletedSteps(new Set());
     Object.keys(window.sessionStorage)
       .filter((key) => key.startsWith("uh-"))
       .forEach((key) => window.sessionStorage.removeItem(key));
@@ -739,11 +1106,11 @@ export function Visualiser() {
     );
   }
 
-  function goHome() {
+  function goHome(trigger?: HTMLElement) {
     if (step !== "start" && hasJourneyProgress()) {
       setResumeStep(step);
     }
-    go("start");
+    requestNavigation("start", trigger);
   }
 
   function requestJourneyReset(trigger: HTMLElement) {
@@ -828,7 +1195,7 @@ export function Visualiser() {
               <button className="button button-dark" type="button" onClick={loadCatalogue}>
                 Try again
               </button>
-              <button className="button button-quiet" type="button" onClick={goHome}>
+              <button className="button button-quiet" type="button" onClick={(event) => goHome(event.currentTarget)}>
                 Return home
               </button>
             </div>
@@ -889,15 +1256,21 @@ export function Visualiser() {
     );
   }
 
-  function FurniturePredictionPanel() {
-    if (!localPhoto || !furniturePhotoClassification || !selectedFurniture) {
+  function FurniturePredictionPanel({
+    furniture = selectedFurniture,
+    selectionOverride = furnitureSelectionOverride,
+  }: {
+    furniture?: FurnitureType;
+    selectionOverride?: FurnitureSelectionOverride | null;
+  } = {}) {
+    if (!localPhoto || !furniturePhotoClassification || !furniture) {
       return null;
     }
 
     const isUncertain = furniturePhotoClassification.status === "uncertain";
     const isMatch =
       !isUncertain &&
-      furniturePhotoClassification.detectedFurnitureType === selectedFurniture.name;
+      furniturePhotoClassification.detectedFurnitureType === furniture.name;
 
     return (
       <section className="furniture-comparison" aria-label="Photo prediction and furniture selection">
@@ -916,10 +1289,10 @@ export function Visualiser() {
         </div>
         <div>
           <span>Your furniture selection</span>
-          <strong>{selectedFurniture.name}</strong>
+          <strong>{furniture.name}</strong>
           <small>This selection will be used for the estimate.</small>
         </div>
-        <p className={furnitureSelectionOverride ? "comparison-warning" : "comparison-status"}>
+        <p className={selectionOverride ? "comparison-warning" : "comparison-status"}>
           {isUncertain
             ? "You chose the furniture type manually."
             : isMatch
@@ -1008,7 +1381,7 @@ export function Visualiser() {
         <div className="step-card">
           <label className={`upload-zone ${photoError ? "upload-zone-error" : ""}`} htmlFor="furniture-photo">
             <span className="upload-mark" aria-hidden="true">＋</span>
-            <strong>{localPhoto ? "Replace your photo" : "Choose a furniture photo"}</strong>
+            <strong>{draftPhoto ? "Replace your photo" : "Choose a furniture photo"}</strong>
             <span>JPEG, PNG or WebP, up to 10 MB</span>
           </label>
           <input
@@ -1022,34 +1395,32 @@ export function Visualiser() {
           />
           <p id="photo-guidance" className="field-help">One item, even light and minimal obstruction works best.</p>
           {photoError ? <p id="photo-error" className="field-error" role="alert">{photoError}</p> : null}
-          {localPhoto ? (
+          {draftPhoto ? (
             <div className="local-preview">
-              <img src={localPhoto.url} alt="Your uploaded furniture photograph" />
+              <img src={draftPhoto.url} alt="Your uploaded furniture photograph" />
               <div>
-                <strong>{localPhoto.name}</strong>
-                <span>{fileSize(localPhoto.size)} · {furnitureCheckStatus === "ready" ? "Checked securely" : "Not sent"}</span>
-                <button className="text-button text-button-danger" type="button" onClick={removePhoto}>
+                <strong>{draftPhoto.name}</strong>
+                <span>{fileSize(draftPhoto.size)} · {draftFurnitureCheckStatus === "ready" ? "Checked securely" : "Not sent"}</span>
+                <button className="text-button text-button-danger" type="button" onClick={removeDraftPhoto}>
                   Remove photo
                 </button>
               </div>
             </div>
           ) : null}
-          {localPhoto ? (
+          {draftPhoto ? (
             <label className="acknowledgement photo-check-consent">
               <input
                 type="checkbox"
-                checked={aiAcknowledged}
-                disabled={furnitureCheckStatus === "checking"}
+                checked={draftAiAcknowledged}
+                disabled={draftFurnitureCheckStatus === "checking"}
                 onChange={(event) => {
                   const checked = event.target.checked;
-                  setAiAcknowledged(checked);
+                  setDraftAiAcknowledged(checked);
                   if (!checked) {
-                    setFurnitureCheckStatus("idle");
-                    setFurnitureCheckError("");
-                    setFurniturePhotoClassification(null);
+                    setDraftFurnitureCheckStatus("idle");
+                    setDraftFurnitureCheckError("");
+                    setDraftFurniturePhotoClassification(null);
                     setFurnitureSelectionAlert(null);
-                    setFurnitureSelectionOverride(null);
-                    setSelectedFurnitureId("");
                   }
                 }}
               />
@@ -1058,30 +1429,31 @@ export function Visualiser() {
               </span>
             </label>
           ) : null}
-          {localPhoto ? (
+          {draftPhoto ? (
             <p className="field-help retention-note">OpenAI may retain API abuse-monitoring content for up to 30 days.</p>
           ) : null}
+          {dirtyStep === "photo" ? <p className="unsaved-note" role="status">Unsaved changes</p> : null}
           <div className="card-actions step-navigation">
-            <button className="button button-quiet navigation-back" type="button" onClick={() => go("start")}>Back to home</button>
+            <button className="button button-quiet navigation-back" type="button" onClick={(event) => requestNavigation("start", event.currentTarget)}>Back to home</button>
             <button
               className="button button-dark navigation-primary"
               type="button"
-              disabled={furnitureCheckStatus === "checking" || Boolean(localPhoto && !aiAcknowledged)}
+              disabled={draftFurnitureCheckStatus === "checking" || Boolean(draftPhoto && !draftAiAcknowledged)}
               onClick={() => void continueFromPhoto()}
             >
-              {furnitureCheckStatus === "checking"
+              {draftFurnitureCheckStatus === "checking"
                 ? "Checking furniture type…"
-                : localPhoto
-                  ? furnitureCheckStatus === "ready"
-                    ? "Continue to furniture"
-                    : "Check photo and continue"
+                : completedSteps.has("photo")
+                  ? "Apply photo change"
+                  : draftPhoto
+                    ? "Check photo and continue"
                   : "Continue without a photo"}
             </button>
           </div>
-          {localPhoto && !aiAcknowledged ? (
+          {draftPhoto && !draftAiAcknowledged ? (
             <p className="field-help consent-help">Confirm permission above to enable the Step 2 furniture check.</p>
           ) : null}
-          {furnitureCheckStatus === "checking" ? (
+          {draftFurnitureCheckStatus === "checking" ? (
             <div className="preview-status" role="status" aria-live="polite">
               <span className="status-dot status-dot-loading" aria-hidden="true" />
               <span>Checking your photo… This can take up to 45 seconds.</span>
@@ -1106,7 +1478,7 @@ export function Visualiser() {
         <LiveDataPanel />
         {reconciliationNotice ? <p className="notice" role="status">{reconciliationNotice}</p> : null}
         <ErrorSummary />
-        {localPhoto && furnitureCheckStatus === "ready" && !selectedFurniture ? (
+        {localPhoto && furnitureCheckStatus === "ready" && !draftFurniture ? (
           <div className="state-panel photo-check-ready" role="status">
             <span className="status-dot status-dot-ready" aria-hidden="true" />
             <div>
@@ -1121,7 +1493,7 @@ export function Visualiser() {
             <div>
               <strong>Photo analysis unavailable</strong>
               <p>{furnitureCheckError}</p>
-              <button className="button button-light" type="button" onClick={() => go("photo")}>
+              <button className="button button-light" type="button" onClick={(event) => requestNavigation("photo", event.currentTarget)}>
                 Return to photo and retry
               </button>
             </div>
@@ -1154,7 +1526,7 @@ export function Visualiser() {
                     Use {furnitureSelectionAlert.selectedFurnitureName}
                   </button>
                 ) : null}
-                <button className="button button-light" type="button" onClick={() => go("photo")}>
+                <button className="button button-light" type="button" onClick={(event) => requestNavigation("photo", event.currentTarget)}>
                   Change photo
                 </button>
                 {furnitureSelectionAlert.kind === "mismatch" ? (
@@ -1174,7 +1546,7 @@ export function Visualiser() {
                     <span>I understand that the estimate may be inaccurate because my selection differs from the AI prediction.</span>
                   </label>
                   <button className="button button-dark" type="button" disabled={!overrideAcknowledged} onClick={acceptFurnitureOverride}>
-                    Continue with {furnitureSelectionAlert.selectedFurnitureName}
+                    Use {furnitureSelectionAlert.selectedFurnitureName}
                   </button>
                 </div>
               ) : null}
@@ -1186,12 +1558,12 @@ export function Visualiser() {
             <fieldset className="choice-grid furniture-grid" aria-describedby="furniture-photo-check-help">
               <legend>Active furniture types</legend>
               {catalogue.furniture.map((item) => (
-                <label className={`choice-card ${selectedFurnitureId === item.id ? "choice-card-selected" : ""}`} key={item.id}>
+                <label className={`choice-card ${draftFurnitureId === item.id ? "choice-card-selected" : ""}`} key={item.id}>
                   <input
                     type="radio"
                     name="furniture-type"
                     value={item.id}
-                    checked={selectedFurnitureId === item.id}
+                    checked={draftFurnitureId === item.id}
                     onChange={() => selectFurnitureType(item)}
                   />
                   <span className="choice-check" aria-hidden="true" />
@@ -1203,7 +1575,10 @@ export function Visualiser() {
                 </label>
               ))}
             </fieldset>
-            <FurniturePredictionPanel />
+            <FurniturePredictionPanel
+              furniture={draftFurniture}
+              selectionOverride={draftFurnitureSelectionOverride}
+            />
             <p id="furniture-photo-check-help" className="field-help furniture-check-help">
               {localPhoto
                 ? "Selections are checked against your consented photograph before pricing assumptions are applied."
@@ -1220,14 +1595,17 @@ export function Visualiser() {
                 min="1"
                 max="10"
                 step="1"
-                value={quantity}
+                value={draftQuantity}
                 aria-describedby="quantity-help"
-                onChange={(event) => setQuantity(Number(event.target.value))}
+                onChange={(event) => setDraftQuantity(Number(event.target.value))}
               />
             </div>
+            {dirtyStep === "furniture" ? <p className="unsaved-note" role="status">Unsaved changes</p> : null}
             <div className="page-actions step-navigation">
-              <button className="button button-quiet navigation-back" type="button" onClick={() => go("photo")}>Back to photo</button>
-              <button className="button button-dark navigation-primary" type="button" onClick={continueFromFurniture}>Choose a fabric</button>
+              <button className="button button-quiet navigation-back" type="button" onClick={(event) => requestNavigation("photo", event.currentTarget)}>Back to photo</button>
+              <button className="button button-dark navigation-primary" type="button" onClick={continueFromFurniture}>
+                {completedSteps.has("furniture") ? "Apply furniture changes" : "Choose a fabric"}
+              </button>
             </div>
           </>
         ) : null}
@@ -1284,17 +1662,16 @@ export function Visualiser() {
                   const imageFailed = failedSwatches.has(fabric.id) || !fabric.swatchImageUrl;
                   const unavailable = !isAvailableStockStatus(fabric.stockStatus);
                   return (
-                    <label className={`fabric-card ${selectedFabricId === fabric.id ? "fabric-card-selected" : ""} ${unavailable ? "fabric-card-unavailable" : ""}`} key={fabric.id}>
+                    <label className={`fabric-card ${draftFabricId === fabric.id ? "fabric-card-selected" : ""} ${unavailable ? "fabric-card-unavailable" : ""}`} key={fabric.id}>
                       <input
                         type="radio"
                         name="fabric"
                         value={fabric.id}
                         disabled={unavailable}
-                        checked={selectedFabricId === fabric.id}
+                        checked={draftFabricId === fabric.id}
                         onChange={() => {
-                          setSelectedFabricId(fabric.id);
+                          setDraftFabricId(fabric.id);
                           setReconciliationNotice("");
-                          clearGeneratedPreview();
                           setFormError("");
                         }}
                       />
@@ -1349,9 +1726,12 @@ export function Visualiser() {
                 </div>
               </div>
             )}
+            {dirtyStep === "fabrics" ? <p className="unsaved-note" role="status">Unsaved changes</p> : null}
             <div className="page-actions step-navigation">
-              <button className="button button-quiet navigation-back" type="button" onClick={() => go("furniture")}>Back to furniture</button>
-              <button className="button button-dark navigation-primary" type="button" onClick={continueFromFabrics}>Review my choices</button>
+              <button className="button button-quiet navigation-back" type="button" onClick={(event) => requestNavigation("furniture", event.currentTarget)}>Back to furniture</button>
+              <button className="button button-dark navigation-primary" type="button" onClick={continueFromFabrics}>
+                {completedSteps.has("fabrics") ? "Apply fabric change" : "Review my choices"}
+              </button>
             </div>
           </>
         ) : null}
@@ -1394,6 +1774,15 @@ export function Visualiser() {
           </div>
           <SelectionSummary />
         </div>
+        {localPhoto && furnitureCheckStatus === "error" && furnitureCheckError ? (
+          <div className="state-panel state-panel-warning" role="status">
+            <span className="status-dot status-dot-warning" aria-hidden="true" />
+            <div>
+              <strong>Automatic furniture check unavailable</strong>
+              <p>Your applied furniture selection is still being used. You can return to Photo and retry the check.</p>
+            </div>
+          </div>
+        ) : null}
         <div className="review-grid">
           <div className="review-media-card">
             {localPhoto ? (
@@ -1462,14 +1851,14 @@ export function Visualiser() {
               Continue to indicative estimate
             </button>
             {!localPhoto ? (
-              <button className="button button-light button-full" type="button" onClick={() => go("photo")}>
+              <button className="button button-light button-full" type="button" onClick={(event) => requestNavigation("photo", event.currentTarget, "review")}>
                 Add a photo first
               </button>
             ) : null}
           </div>
         </div>
         <div className="page-actions step-navigation">
-          <button className="button button-quiet navigation-back" type="button" onClick={() => go("fabrics")} disabled={previewStatus === "generating"}>Back to fabrics</button>
+          <button className="button button-quiet navigation-back" type="button" onClick={(event) => requestNavigation("fabrics", event.currentTarget, "review")} disabled={previewStatus === "generating"}>Back to fabrics</button>
         </div>
       </section>
     );
@@ -1574,8 +1963,8 @@ export function Visualiser() {
         </div>
         <div className="page-actions page-actions-prominent">
           <button className="button button-dark button-large" type="button" onClick={() => go("quote")}>View &amp; save project summary</button>
-          <button className="button button-light" type="button" onClick={() => go("furniture")}>Edit selections</button>
-          <button className="button button-quiet" type="button" onClick={() => go("photo")}>Change photo</button>
+          <button className="button button-light" type="button" onClick={(event) => requestNavigation("furniture", event.currentTarget, "review")}>Edit selections</button>
+          <button className="button button-quiet" type="button" onClick={(event) => requestNavigation("photo", event.currentTarget, "review")}>Change photo</button>
         </div>
       </section>
     );
@@ -1661,7 +2050,7 @@ export function Visualiser() {
           </button>
           <p className="field-help">In the print window, select “Save as PDF” to download a copy.</p>
           <div className="page-actions page-actions-left">
-            {estimate ? <button className="button button-light" type="button" onClick={() => go("furniture")}>Edit selections</button> : null}
+            {estimate ? <button className="button button-light" type="button" onClick={(event) => requestNavigation("furniture", event.currentTarget, "review")}>Edit selections</button> : null}
             <button className="button button-light" type="button" onClick={(event) => requestJourneyReset(event.currentTarget)}>Start again</button>
           </div>
         </div>
@@ -1744,7 +2133,7 @@ export function Visualiser() {
       <header className="app-header">
         <a className="brand-link" href="#/start" aria-label="Upholstery Hub home" onClick={(event) => {
           event.preventDefault();
-          goHome();
+          goHome(event.currentTarget);
         }}>
           <picture>
             <source media="(max-width: 480px)" srcSet="branding/UpholsteryHubIcon.png" />
@@ -1753,7 +2142,7 @@ export function Visualiser() {
         </a>
         <div className="header-actions">
           {step !== "start" ? (
-            <button className="text-button" type="button" onClick={goHome}>Home</button>
+            <button className="text-button" type="button" onClick={(event) => goHome(event.currentTarget)}>Home</button>
           ) : null}
           <span className="pilot-chip">Customer pilot</span>
         </div>
@@ -1769,16 +2158,17 @@ export function Visualiser() {
           <ol>
             {progressSteps.map((item, index) => {
               const current = item.id === step || (step === "result" && item.id === "review");
-              const complete = index < progressIndex;
+              const complete = completedSteps.has(item.id);
+              const unsaved = current && dirtyStep === item.id;
               const marker = complete ? "✓" : index + 1;
               return (
-                <li key={item.id} className={current ? "progress-current" : complete ? "progress-complete" : ""} aria-current={current ? "step" : undefined}>
+                <li key={item.id} className={`${current ? "progress-current" : complete ? "progress-complete" : ""} ${unsaved ? "progress-dirty" : ""}`} aria-current={current ? "step" : undefined}>
                   {complete && !current ? (
                     <button
                       className="progress-step-button"
                       type="button"
                       aria-label={`Edit ${item.label.toLowerCase()} step`}
-                      onClick={() => go(item.id)}
+                      onClick={(event) => navigateToCompletedStep(item.id, event.currentTarget)}
                     >
                       <span className="progress-marker">{marker}</span>
                       <span>{item.label}</span>
@@ -1786,7 +2176,10 @@ export function Visualiser() {
                   ) : (
                     <span className="progress-step-static">
                       <span className="progress-marker">{marker}</span>
-                      <span>{item.label}</span>
+                      <span className="progress-label">
+                        <span>{item.label}</span>
+                        {unsaved ? <small>Unsaved changes</small> : null}
+                      </span>
                     </span>
                   )}
                 </li>
@@ -1813,6 +2206,24 @@ export function Visualiser() {
         </div>
         <p className="footer-status">Prototype demonstration. No account required.</p>
       </footer>
+
+      <dialog
+        className="reset-dialog"
+        ref={leaveDialogRef}
+        aria-labelledby="leave-dialog-title"
+        aria-describedby="leave-dialog-description"
+        onCancel={(event) => {
+          event.preventDefault();
+          keepEditing();
+        }}
+      >
+        <h2 id="leave-dialog-title">Leave without applying changes?</h2>
+        <p id="leave-dialog-description">Your changes on this step have not been applied.</p>
+        <div className="reset-dialog-actions">
+          <button className="button button-dark" type="button" ref={leaveSafeButtonRef} onClick={keepEditing}>Keep editing</button>
+          <button className="button button-light" type="button" onClick={discardChangesAndLeave}>Discard changes</button>
+        </div>
+      </dialog>
 
       <dialog
         className="reset-dialog"

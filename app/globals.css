@@ -271,6 +271,30 @@ img {
   background: var(--yellow);
 }
 
+.progress-label {
+  display: grid;
+  gap: 0.05rem;
+  text-align: left;
+}
+
+.progress-label small,
+.progress-dirty .progress-label small {
+  color: var(--warning);
+  font-size: 0.68rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.progress-dirty {
+  border-bottom-color: var(--warning);
+}
+
+.progress-dirty .progress-marker {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+  color: var(--ink);
+}
+
 .main-content {
   min-height: 620px;
   padding-block: clamp(3.5rem, 8vw, 7.5rem);
@@ -610,6 +634,17 @@ img {
   margin-top: 0.75rem;
   color: var(--error);
   font-weight: 700;
+}
+
+.unsaved-note {
+  width: fit-content;
+  margin: 1rem 0 0;
+  border-radius: 999px;
+  background: var(--warning-soft);
+  color: var(--warning);
+  padding: 0.35rem 0.7rem;
+  font-size: 0.82rem;
+  font-weight: 750;
 }
 
 .local-preview {
