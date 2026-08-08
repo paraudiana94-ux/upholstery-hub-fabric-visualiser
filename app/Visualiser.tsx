@@ -38,11 +38,19 @@ interface GeneratedPreview {
   disclaimer: string;
 }
 
-type PreviewStatus = "idle" | "generating" | "ready" | "error";
+type PreviewStatus = "idle" | "generating" | "ready" | "mismatch" | "error";
 
 interface PreviewErrorPayload {
   code?: string;
   message?: string;
+  detectedFurnitureType?: string;
+  selectedFurnitureType?: string;
+}
+
+interface FurnitureMismatch {
+  message: string;
+  detectedFurnitureType: string;
+  selectedFurnitureType: string;
 }
 
 const steps: Step[] = [
@@ -136,6 +144,8 @@ export function Visualiser() {
   const [generatedPreview, setGeneratedPreview] =
     useState<GeneratedPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
+  const [furnitureMismatch, setFurnitureMismatch] =
+    useState<FurnitureMismatch | null>(null);
   const [customerNotes, setCustomerNotes] = useState("");
   const [reconciliationNotice, setReconciliationNotice] = useState("");
 
@@ -328,6 +338,7 @@ export function Visualiser() {
     setGeneratedPreview(null);
     setPreviewStatus("idle");
     setPreviewError("");
+    setFurnitureMismatch(null);
     setAiAcknowledged(false);
   }
 
@@ -376,7 +387,7 @@ export function Visualiser() {
     }
   }
 
-  async function createIndicativePreview() {
+  async function createIndicativePreview(allowMismatch = false) {
     if (!localPhoto || !selectedFabric || !selectedFurniture || !aiAcknowledged) {
       setPreviewStatus("error");
       setPreviewError(
@@ -387,10 +398,11 @@ export function Visualiser() {
 
     setPreviewStatus("generating");
     setPreviewError("");
+    setFurnitureMismatch(null);
     setGeneratedPreview(null);
 
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 130_000);
+    const timeout = window.setTimeout(() => controller.abort(), 165_000);
     const endpoint = window.location.hostname.endsWith("github.io")
       ? "https://upholstery-hub-fabric-visualiser.onrender.com/api/preview"
       : "/api/preview";
@@ -398,6 +410,9 @@ export function Visualiser() {
     body.append("photo", localPhoto.file, localPhoto.name);
     body.append("fabricId", selectedFabric.id);
     body.append("furnitureId", selectedFurniture.id);
+    if (allowMismatch) {
+      body.append("allowMismatch", "true");
+    }
 
     try {
       const response = await fetch(endpoint, {
@@ -410,6 +425,23 @@ export function Visualiser() {
         | PreviewErrorPayload
         | null;
       if (!response.ok || !payload || !("imageDataUrl" in payload)) {
+        if (
+          response.status === 409 &&
+          payload &&
+          "code" in payload &&
+          payload.code === "FURNITURE_MISMATCH" &&
+          payload.message &&
+          payload.detectedFurnitureType &&
+          payload.selectedFurnitureType
+        ) {
+          setFurnitureMismatch({
+            message: payload.message,
+            detectedFurnitureType: payload.detectedFurnitureType,
+            selectedFurnitureType: payload.selectedFurnitureType,
+          });
+          setPreviewStatus("mismatch");
+          return;
+        }
         throw new Error(
           payload && "message" in payload && payload.message
             ? payload.message
@@ -918,7 +950,7 @@ export function Visualiser() {
             <span className="eyebrow">AI preview status</span>
             <h2>{localPhoto ? "Create an indicative preview" : "Add a photo to create a preview"}</h2>
             <p id="ai-blocked">
-              The secure Render service uses OpenAI to apply the selected live Cloudinary swatch to your furniture photo. Results can alter details and are not a finished-work guarantee.
+              The secure Render service first checks whether the furniture in your photo matches your selected type. If it matches, OpenAI applies the selected live Cloudinary swatch. Results can alter details and are not a finished-work guarantee.
             </p>
             {localPhoto ? (
               <>
@@ -930,7 +962,7 @@ export function Visualiser() {
                     onChange={(event) => setAiAcknowledged(event.target.checked)}
                   />
                   <span>
-                    I have permission to use this photo and agree to send it, plus the selected public fabric swatch, to Upholstery Hub’s Render service and OpenAI to generate an indicative preview. OpenAI may retain API abuse-monitoring content for up to 30 days.
+                    I have permission to use this photo and agree to send it, plus the selected public fabric swatch, to Upholstery Hub’s Render service and OpenAI to check the furniture type and generate an indicative preview. OpenAI may retain API abuse-monitoring content for up to 30 days.
                   </span>
                 </label>
                 <button
@@ -940,10 +972,10 @@ export function Visualiser() {
                   aria-describedby="ai-blocked preview-guidance"
                   onClick={() => void createIndicativePreview()}
                 >
-                  {previewStatus === "generating" ? "Creating preview…" : "Create indicative preview"}
+                  {previewStatus === "generating" ? "Checking photo and creating preview…" : "Check photo & create preview"}
                 </button>
                 <p id="preview-guidance" className="field-help">
-                  Generation may take up to two minutes. This prototype limits each visitor to 10 previews per hour.
+                  The furniture check and generation may take up to three minutes. This prototype limits each visitor to 10 preview attempts per hour.
                 </p>
               </>
             ) : (
@@ -954,7 +986,24 @@ export function Visualiser() {
             {previewStatus === "generating" ? (
               <div className="preview-status" role="status" aria-live="polite">
                 <span className="status-dot status-dot-loading" aria-hidden="true" />
-                <span>Creating your indicative preview securely. Keep this page open.</span>
+                <span>Checking the furniture type, then creating your indicative preview securely. Keep this page open.</span>
+              </div>
+            ) : null}
+            {previewStatus === "mismatch" && furnitureMismatch ? (
+              <div className="preview-status preview-status-warning" role="alert">
+                <span className="status-dot status-dot-warning" aria-hidden="true" />
+                <div className="furniture-mismatch-copy">
+                  <strong>Check your furniture selection</strong>
+                  <p>{furnitureMismatch.message} Change the selection for a more accurate estimate and preview.</p>
+                  <div className="mismatch-actions">
+                    <button className="button button-dark" type="button" onClick={() => go("furniture")}>
+                      Change furniture type
+                    </button>
+                    <button className="button button-light" type="button" onClick={() => void createIndicativePreview(true)}>
+                      Use {furnitureMismatch.selectedFurnitureType} anyway
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : null}
             {previewStatus === "error" && previewError ? (

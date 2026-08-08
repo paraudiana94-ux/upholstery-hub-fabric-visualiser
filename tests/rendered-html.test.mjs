@@ -146,6 +146,7 @@ test("preview status reports configuration without exposing the server key", asy
   assert.equal(payload.configured, true);
   assert.equal(payload.provider, "OpenAI");
   assert.equal(payload.model, "gpt-image-2");
+  assert.equal(payload.furnitureCheckModel, "gpt-5.6-luna");
   assert.equal(JSON.stringify(payload).includes("test-key-never-returned"), false);
   assert.equal(
     response.headers.get("access-control-allow-origin"),
@@ -165,6 +166,7 @@ test("preview status tolerates vinext production calls without a worker env bind
   assert.equal(response.status, 200);
   assert.equal(payload.configured, Boolean(process.env.OPENAI_API_KEY));
   assert.equal(payload.model, "gpt-image-2");
+  assert.equal(payload.furnitureCheckModel, "gpt-5.6-luna");
 });
 
 test("preview route resolves live IDs and sends the customer photo plus live Cloudinary swatch", async () => {
@@ -189,6 +191,33 @@ test("preview route resolves live IDs and sends the customer photo plus live Clo
     }
     if (url.includes("gid=589043625")) {
       return new Response(furniture, { headers: { "content-type": "text/csv" } });
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-key");
+      const requestBody = JSON.parse(String(init?.body));
+      assert.equal(requestBody.model, "gpt-5.6-luna");
+      assert.equal(requestBody.store, false);
+      assert.equal(requestBody.reasoning.effort, "none");
+      assert.equal(requestBody.input[0].content[1].detail, "low");
+      assert.match(requestBody.input[0].content[1].image_url, /^data:image\/jpeg;base64,/);
+      assert.equal(requestBody.text.format.type, "json_schema");
+      assert.ok(requestBody.text.format.schema.properties.detectedFurnitureType.enum.includes("Armchair"));
+      return Response.json({
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  detectedFurnitureType: "Armchair",
+                  confidence: 0.98,
+                }),
+              },
+            ],
+          },
+        ],
+      });
     }
     if (url === "https://res.cloudinary.com/example/F001.jpg") {
       return new Response(new Blob(["live-swatch"], { type: "image/jpeg" }), {
@@ -236,8 +265,91 @@ test("preview route resolves live IDs and sends the customer photo plus live Clo
     assert.equal(payload.model, "gpt-image-2");
     assert.equal(requested.filter((url) => url.includes("docs.google.com")).length, 2);
     assert.ok(requested.includes("https://res.cloudinary.com/example/F001.jpg"));
+    assert.ok(requested.includes("https://api.openai.com/v1/responses"));
     assert.ok(requested.includes("https://api.openai.com/v1/images/edits"));
     assert.equal(JSON.stringify(payload).includes("test-key"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("preview route pauses when the photographed furniture conflicts with the live selection", async () => {
+  const worker = await getWorker();
+  const originalFetch = globalThis.fetch;
+  const requested = [];
+
+  const fabrics = [
+    '"Fabric ID","Fabric Name","Collection","Main Colour","Colour Hex","Pattern","Material","Price per Metre (€)","Suitable Furniture Types","Stock Status","Active","Demo Data","Last Updated","Swatch Image URL"',
+    '"F001","Test Linen","Demo","Sand","#D7C4A3","Plain","Blend","28","Armchair, Dining Chair","In Stock","TRUE","TRUE","2026-08-06","https://res.cloudinary.com/example/F001.jpg"',
+  ].join("\n");
+  const furniture = [
+    '"Furniture Type ID","Furniture Type","Min Estimated Metres","Max Estimated Metres","Starting Labour Cost (€)","Min Turnaround Weeks","Max Turnaround Weeks","Special Considerations","Active","Demo Data","Last Updated"',
+    '"FT002","Armchair","5","7","550","4","6","Inspection required","TRUE","TRUE","2026-08-06"',
+    '"FT003","Dining Chair","1","2","180","3","5","Inspection required","TRUE","TRUE","2026-08-06"',
+  ].join("\n");
+
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.includes("gid=441339050")) {
+      return new Response(fabrics, { headers: { "content-type": "text/csv" } });
+    }
+    if (url.includes("gid=589043625")) {
+      return new Response(furniture, { headers: { "content-type": "text/csv" } });
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      return Response.json({
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  detectedFurnitureType: "Armchair",
+                  confidence: 0.97,
+                }),
+              },
+            ],
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected fetch after mismatch: ${url}`);
+  };
+
+  const form = new FormData();
+  form.append(
+    "photo",
+    new File(["customer-photo"], "chair.jpg", { type: "image/jpeg" }),
+  );
+  form.append("fabricId", "F001");
+  form.append("furnitureId", "FT003");
+
+  try {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/preview", {
+        method: "POST",
+        headers: {
+          origin: "https://paraudiana94-ux.github.io",
+          "x-forwarded-for": "192.0.2.11",
+        },
+        body: form,
+      }),
+      { ...runtime, OPENAI_API_KEY: "test-key" },
+      context,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.equal(payload.code, "FURNITURE_MISMATCH");
+    assert.equal(payload.detectedFurnitureType, "Armchair");
+    assert.equal(payload.selectedFurnitureType, "Dining Chair");
+    assert.match(payload.message, /Armchair/);
+    assert.match(payload.message, /Dining Chair/);
+    assert.ok(requested.includes("https://api.openai.com/v1/responses"));
+    assert.equal(requested.includes("https://res.cloudinary.com/example/F001.jpg"), false);
+    assert.equal(requested.includes("https://api.openai.com/v1/images/edits"), false);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -269,11 +381,29 @@ test("testing quota and logo reset stay aligned across server and client", async
 
   assert.match(previewSource, /RATE_LIMIT_REQUESTS = 10/);
   assert.match(previewSource, /allows 10 AI previews per hour/);
-  assert.match(visualiserSource, /limits each visitor to 10 previews per hour/);
+  assert.match(visualiserSource, /limits each visitor to 10 preview attempts per hour/);
   assert.match(visualiserSource, /function resetJourneyFromLogo\(\)/);
   assert.match(visualiserSource, /key\.startsWith\("uh-"\)/);
   assert.match(visualiserSource, /window\.location\.reload\(\)/);
   assert.match(readme, /allows 10 preview attempts per source IP per hour/);
+});
+
+test("furniture photo checking is consent-gated and offers a mismatch correction", async () => {
+  const [previewSource, visualiserSource, readme] = await Promise.all([
+    readFile(new URL("../worker/preview.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(previewSource, /OPENAI_FURNITURE_CHECK_MODEL = "gpt-5\.6-luna"/);
+  assert.match(previewSource, /FURNITURE_MISMATCH/);
+  assert.match(previewSource, /detail: "low"/);
+  assert.match(previewSource, /store: false/);
+  assert.match(visualiserSource, /Check photo & create preview/);
+  assert.match(visualiserSource, /Check your furniture selection/);
+  assert.match(visualiserSource, /Change furniture type/);
+  assert.match(visualiserSource, /Use \{furnitureMismatch\.selectedFurnitureType\} anyway/);
+  assert.match(readme, /clear mismatch pauses the flow/);
 });
 
 test("project summary is local, printable and truthfully labelled", async () => {

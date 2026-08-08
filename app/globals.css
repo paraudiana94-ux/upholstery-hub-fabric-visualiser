@@ -1208,6 +1208,34 @@ img {
   color: var(--error);
 }
 
+.preview-status-warning {
+  border-color: #ccb05e;
+  background: var(--warning-soft);
+  color: #513d00;
+}
+
+.furniture-mismatch-copy {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.furniture-mismatch-copy p {
+  margin: 0;
+}
+
+.mismatch-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.45rem;
+}
+
+.mismatch-actions .button {
+  min-height: 42px;
+  flex: 1 1 190px;
+  padding: 0.65rem 0.85rem;
+}
+
 .narrow-section {
   max-width: 760px;
   margin-inline: auto;

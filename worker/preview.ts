@@ -1,11 +1,14 @@
 import { fetchPublishedCatalogue } from "../lib/catalogue";
 
 export const OPENAI_IMAGE_MODEL = "gpt-image-2";
+export const OPENAI_FURNITURE_CHECK_MODEL = "gpt-5.6-luna";
 
 const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
+const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = 12 * 1024 * 1024;
 const MAX_SWATCH_BYTES = 10 * 1024 * 1024;
+const FURNITURE_MISMATCH_CONFIDENCE = 0.72;
 const RATE_LIMIT_REQUESTS = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
@@ -22,6 +25,32 @@ interface RateLimitEntry {
 interface OpenAIImageResponse {
   data?: Array<{ b64_json?: string }>;
   error?: { code?: string };
+}
+
+interface OpenAITextResponse {
+  output_text?: string;
+  output?: Array<{
+    type?: string;
+    content?: Array<{ type?: string; text?: string }>;
+  }>;
+  error?: { code?: string };
+}
+
+interface FurniturePhotoCheck {
+  status: "match" | "mismatch" | "uncertain";
+  detectedFurnitureType: string;
+  confidence: number;
+}
+
+class FurnitureCheckFailure extends Error {
+  status: number;
+  apiCode: string;
+
+  constructor(status: number, apiCode = "") {
+    super("The furniture photo check failed.");
+    this.status = status;
+    this.apiCode = apiCode;
+  }
 }
 
 const rateLimits = new Map<string, RateLimitEntry>();
@@ -158,6 +187,180 @@ function previewPrompt(furnitureName: string, fabricName: string): string {
   ].join(" ");
 }
 
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 32_768;
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function responseOutputText(payload: OpenAITextResponse): string {
+  if (payload.output_text?.trim()) {
+    return payload.output_text.trim();
+  }
+  return (payload.output ?? [])
+    .flatMap((item) => item.content ?? [])
+    .filter((content) => content.type === "output_text" && content.text)
+    .map((content) => content.text ?? "")
+    .join("")
+    .trim();
+}
+
+async function safetyIdentifier(request: Request): Promise<string> {
+  const input = new TextEncoder().encode(`upholstery-hub:${clientKey(request)}`);
+  const digest = await crypto.subtle.digest("SHA-256", input);
+  return `uh_${Array.from(new Uint8Array(digest).slice(0, 12))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+async function checkFurniturePhoto(
+  request: Request,
+  apiKey: string,
+  photo: File,
+  selectedFurnitureType: string,
+  availableFurnitureTypes: string[],
+): Promise<FurniturePhotoCheck> {
+  const classificationValues = Array.from(
+    new Set([...availableFurnitureTypes, "Other", "Unclear"]),
+  );
+  const imageDataUrl = `data:${photo.type};base64,${arrayBufferToBase64(await photo.arrayBuffer())}`;
+  const prompt = [
+    "Classify the dominant furniture item in this customer photograph.",
+    `Choose exactly one value from this live catalogue list: ${availableFurnitureTypes.join(", ")}; or choose Other or Unclear.`,
+    `The customer's current selection is ${selectedFurnitureType}. Classify from the photograph itself; do not copy or favour the selection.`,
+    "Distinguish visually similar seating by its complete form and intended use. In particular, an upholstered lounge armchair is not a dining chair.",
+    "Use Unclear when the furniture is obscured, several different items dominate, no furniture is visible, or the type cannot be determined reliably.",
+  ].join(" ");
+
+  let response: Response;
+  try {
+    response = await fetch(OPENAI_RESPONSES_URL, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: OPENAI_FURNITURE_CHECK_MODEL,
+        store: false,
+        reasoning: { effort: "none" },
+        max_output_tokens: 160,
+        safety_identifier: await safetyIdentifier(request),
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: prompt },
+              { type: "input_image", image_url: imageDataUrl, detail: "low" },
+            ],
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "furniture_photo_check",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                detectedFurnitureType: {
+                  type: "string",
+                  enum: classificationValues,
+                },
+                confidence: { type: "number", minimum: 0, maximum: 1 },
+              },
+              required: ["detectedFurnitureType", "confidence"],
+            },
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch {
+    throw new FurnitureCheckFailure(504);
+  }
+
+  let payload: OpenAITextResponse;
+  try {
+    payload = (await response.json()) as OpenAITextResponse;
+  } catch {
+    throw new FurnitureCheckFailure(response.status || 502);
+  }
+  if (!response.ok) {
+    throw new FurnitureCheckFailure(response.status, payload.error?.code);
+  }
+
+  let parsed: { detectedFurnitureType?: unknown; confidence?: unknown };
+  try {
+    parsed = JSON.parse(responseOutputText(payload)) as {
+      detectedFurnitureType?: unknown;
+      confidence?: unknown;
+    };
+  } catch {
+    throw new FurnitureCheckFailure(502);
+  }
+
+  if (
+    typeof parsed.detectedFurnitureType !== "string" ||
+    !classificationValues.includes(parsed.detectedFurnitureType) ||
+    typeof parsed.confidence !== "number" ||
+    !Number.isFinite(parsed.confidence)
+  ) {
+    throw new FurnitureCheckFailure(502);
+  }
+
+  const confidence = Math.max(0, Math.min(1, parsed.confidence));
+  const detectedFurnitureType = parsed.detectedFurnitureType;
+  const status =
+    detectedFurnitureType === selectedFurnitureType
+      ? "match"
+      : detectedFurnitureType === "Unclear" || confidence < FURNITURE_MISMATCH_CONFIDENCE
+        ? "uncertain"
+        : "mismatch";
+
+  return { status, detectedFurnitureType, confidence };
+}
+
+function furnitureCheckErrorResponse(
+  request: Request,
+  error: FurnitureCheckFailure,
+): Response {
+  if (error.status === 401 || error.status === 403) {
+    return json(
+      request,
+      {
+        code: "AI_NOT_CONFIGURED",
+        message: "The secure AI service is not configured correctly on Render.",
+      },
+      503,
+    );
+  }
+  if (error.status === 429) {
+    return json(
+      request,
+      {
+        code: "AI_TEMPORARILY_UNAVAILABLE",
+        message: "The furniture photo check is busy or has reached its usage limit. Please try again later.",
+      },
+      503,
+    );
+  }
+  return json(
+    request,
+    {
+      code: error.status === 504 ? "FURNITURE_CHECK_TIMEOUT" : "FURNITURE_CHECK_UNAVAILABLE",
+      message:
+        "We could not verify the furniture type in this photo. Please try again or continue without an AI preview.",
+    },
+    error.status === 504 ? 504 : 502,
+  );
+}
+
 function openAIErrorResponse(
   request: Request,
   status: number,
@@ -213,6 +416,7 @@ export function getPreviewStatus(request: Request, env?: PreviewEnv): Response {
     configured: Boolean(getApiKey(env)),
     provider: "OpenAI",
     model: OPENAI_IMAGE_MODEL,
+    furnitureCheckModel: OPENAI_FURNITURE_CHECK_MODEL,
   });
 }
 
@@ -270,6 +474,7 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
   const photo = formData.get("photo");
   const fabricId = String(formData.get("fabricId") ?? "").trim();
   const furnitureId = String(formData.get("furnitureId") ?? "").trim();
+  const allowMismatch = String(formData.get("allowMismatch") ?? "") === "true";
 
   if (!(photo instanceof File) || !fabricId || !furnitureId) {
     return json(
@@ -320,6 +525,54 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
     );
   }
 
+  const limit = checkRateLimit(request);
+  if (!limit.allowed) {
+    return json(
+      request,
+      {
+        code: "PREVIEW_RATE_LIMITED",
+        message: "This prototype allows 10 AI previews per hour. Please try again later.",
+      },
+      429,
+      { "retry-after": String(limit.retryAfter) },
+    );
+  }
+
+  let photoCheck: FurniturePhotoCheck | null = null;
+  if (!allowMismatch) {
+    try {
+      photoCheck = await checkFurniturePhoto(
+        request,
+        apiKey,
+        photo,
+        furniture.name,
+        catalogue.furniture.map((item) => item.name),
+      );
+    } catch (error) {
+      if (error instanceof FurnitureCheckFailure) {
+        return furnitureCheckErrorResponse(request, error);
+      }
+      return furnitureCheckErrorResponse(request, new FurnitureCheckFailure(502));
+    }
+
+    if (photoCheck.status === "mismatch") {
+      const detectedLabel =
+        photoCheck.detectedFurnitureType === "Other"
+          ? "a different furniture type"
+          : `“${photoCheck.detectedFurnitureType}”`;
+      return json(
+        request,
+        {
+          code: "FURNITURE_MISMATCH",
+          message: `The photo appears to show ${detectedLabel}, but “${furniture.name}” is selected.`,
+          detectedFurnitureType: photoCheck.detectedFurnitureType,
+          selectedFurnitureType: furniture.name,
+        },
+        409,
+      );
+    }
+  }
+
   let swatch: Blob;
   try {
     swatch = await fetchLiveSwatch(fabric.swatchImageUrl);
@@ -331,19 +584,6 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
         message: "The current Cloudinary swatch image is unavailable. Choose another fabric or try again.",
       },
       503,
-    );
-  }
-
-  const limit = checkRateLimit(request);
-  if (!limit.allowed) {
-    return json(
-      request,
-      {
-        code: "PREVIEW_RATE_LIMITED",
-        message: "This prototype allows 10 AI previews per hour. Please try again later.",
-      },
-      429,
-      { "retry-after": String(limit.retryAfter) },
     );
   }
 
@@ -395,6 +635,7 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
   return json(request, {
     imageDataUrl: `data:image/jpeg;base64,${imageBase64}`,
     model: OPENAI_IMAGE_MODEL,
+    furniturePhotoCheck: photoCheck?.status ?? (allowMismatch ? "overridden" : "uncertain"),
     generatedAt: new Date().toISOString(),
     disclaimer:
       "AI-generated indicative preview. Confirm colour, texture and pattern scale with a physical swatch and professional inspection.",
