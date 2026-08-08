@@ -27,7 +27,14 @@ interface OpenAIImageResponse {
 const rateLimits = new Map<string, RateLimitEntry>();
 
 function getApiKey(env: PreviewEnv): string {
-  return env.OPENAI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim() || "";
+  const runtime = globalThis as typeof globalThis & {
+    process?: { env?: Record<string, string | undefined> };
+  };
+  return (
+    env.OPENAI_API_KEY?.trim() ||
+    runtime.process?.env?.OPENAI_API_KEY?.trim() ||
+    ""
+  );
 }
 
 function isAllowedOrigin(origin: string): boolean {
