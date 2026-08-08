@@ -4,6 +4,7 @@ A focused prototype that helps a customer choose a live upholstery fabric, revie
 
 - Source repository: <https://github.com/paraudiana94-ux/upholstery-hub-fabric-visualiser>
 - GitHub Pages: <https://paraudiana94-ux.github.io/upholstery-hub-fabric-visualiser/>
+- Secure AI service: <https://upholstery-hub-fabric-visualiser.onrender.com>
 
 ## Current implementation status
 
@@ -13,7 +14,8 @@ A focused prototype that helps a customer choose a live upholstery fabric, revie
 - No catalogue or pricing rows are embedded in the application.
 - The two supplied published exports are publicly readable demonstration data and permit browser access from GitHub Pages.
 - The importer locates the actual field-heading row beneath the Sheet's descriptive rows, validates the contract and exposes a truthful error without fallback rows if either source is malformed or unavailable.
-- AI preview generation and quote submission remain visibly unconnected because no provider, photograph policy or verified quotation route has been approved.
+- An optional, consent-gated AI preview sends the customer photo and the selected live Cloudinary swatch to a server-only Render route, which calls OpenAI's Image Edits API with `gpt-image-2`.
+- Quote submission remains visibly unconnected because no verified quotation route has been supplied.
 
 ## Run locally
 
@@ -34,7 +36,7 @@ npm run lint
 npm run build:pages
 ```
 
-The tests cover server rendering, both published live-tab requests, descriptive-row handling, inactive-row filtering, Cloudinary URL preservation, visible failure without substituted rows and the approved Armchair pricing examples.
+The tests cover server rendering, both published live-tab requests, descriptive-row handling, inactive-row filtering, Cloudinary URL preservation, visible failure without substituted rows, the approved Armchair pricing examples, CORS protection, secret non-disclosure and the live-ID-to-image-edit contract.
 
 ## Live data contract
 
@@ -52,10 +54,23 @@ Publishing makes the two demonstration tabs public to anyone with their export U
 ## Privacy and security
 
 - Customer photographs are validated and previewed with a local object URL.
-- No photograph is uploaded, stored, logged or written to Google Sheets.
+- Selecting a photograph does not upload it. Only pressing **Create indicative preview** after accepting the consent statement sends it to the Render service and OpenAI.
+- The application does not write customer photographs to disk, application storage, logs or Google Sheets. The generated image remains in browser memory and is lost on refresh.
+- OpenAI states that API data is not used for training unless the account opts in. Default abuse-monitoring logs may retain API content for up to 30 days; rare content-safety review exceptions can apply.
 - Only stable product IDs and quantity are stored in browser session storage.
-- The prototype contains no API keys, tokens or credentials.
-- AI and quotation actions remain blocked until their business and privacy requirements are approved.
+- `OPENAI_API_KEY` is read only by the Render server route. It must never be added to GitHub, a client-side environment variable or browser code.
+- The public prototype allows three preview attempts per source IP per hour using an in-memory limiter. Render restarts reset this prototype limiter, so set a strict OpenAI project budget and add durable abuse protection before a wider launch.
+
+## Render configuration
+
+Set `OPENAI_API_KEY` as a secret environment variable in the Render Web Service. The key is intentionally absent from this repository and from the GitHub Pages bundle.
+
+Routes:
+
+- `GET /api/preview/status`: reports only whether a key is configured, plus the provider and model; it never returns the key.
+- `POST /api/preview`: accepts the consented customer photo plus stable live furniture and fabric IDs, re-reads Google Sheets, fetches only the current Cloudinary swatch URL, then makes the server-side OpenAI request.
+
+The route accepts requests from the published GitHub Pages origin, the Render origin and local development origins. CORS is a browser boundary rather than full abuse protection.
 
 ## Main files
 
@@ -64,6 +79,7 @@ Publishing makes the two demonstration tabs public to anyone with their export U
 - `lib/pricing.ts`: deterministic estimate function
 - `lib/catalogue.ts`: published Sheet endpoints, CSV validation and catalogue mapping shared by browser and server
 - `worker/index.ts`: live Google Sheets reader and failure contract
+- `worker/preview.ts`: consented Render/OpenAI image-edit boundary, CORS, validation and prototype rate limit
 - `tests/rendered-html.test.mjs`: reproducible build and behaviour checks
 - `.openai/hosting.json`: Sites hosting declaration
 - `github-pages/index.html` and `github-pages/main.tsx`: GitHub Pages client entry

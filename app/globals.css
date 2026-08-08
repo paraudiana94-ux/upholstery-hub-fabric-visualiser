@@ -1181,6 +1181,30 @@ img {
   margin-top: 1rem;
 }
 
+.preview-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  margin-top: 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: #faf8f2;
+  padding: 0.9rem;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+}
+
+.preview-status .status-dot {
+  margin-top: 0.2rem;
+  flex: 0 0 auto;
+}
+
+.preview-status-error {
+  border-color: #cda79d;
+  background: var(--error-soft);
+  color: var(--error);
+}
+
 .narrow-section {
   max-width: 760px;
   margin-inline: auto;
@@ -1227,6 +1251,15 @@ img {
 
 .direction-images > * + * {
   border-left: 3px solid var(--white);
+}
+
+.generated-preview-image {
+  display: block;
+  width: 100%;
+  height: min(560px, 68vw);
+  min-height: 330px;
+  object-fit: contain;
+  background: #ece7dd;
 }
 
 .no-photo-small {
