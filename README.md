@@ -15,7 +15,8 @@ A focused prototype that helps a customer choose a live upholstery fabric, revie
 - The two supplied published exports are publicly readable demonstration data and permit browser access from GitHub Pages.
 - The importer locates the actual field-heading row beneath the Sheet's descriptive rows, validates the contract and exposes a truthful error without fallback rows if either source is malformed or unavailable.
 - An optional, consent-gated AI preview sends the customer photo and the selected live Cloudinary swatch to a server-only Render route, which calls OpenAI's Image Edits API with `gpt-image-2`.
-- Quote submission remains visibly unconnected because no verified quotation route has been supplied.
+- The final action is truthfully labelled **View & save project summary**. Customers can add optional browser-local consultation notes and use the native print dialog to print or save a polished PDF summary.
+- Email and quote submission remain visibly unconnected because no verified quotation route has been supplied.
 
 ## Run locally
 
@@ -56,6 +57,7 @@ Publishing makes the two demonstration tabs public to anyone with their export U
 - Customer photographs are validated and previewed with a local object URL.
 - Selecting a photograph does not upload it. Only pressing **Create indicative preview** after accepting the consent statement sends it to the Render service and OpenAI.
 - The application does not write customer photographs to disk, application storage, logs or Google Sheets. The generated image remains in browser memory and is lost on refresh.
+- Optional consultation notes remain in component memory, appear only in the printable summary and are cleared with the journey. They are not emailed or submitted.
 - OpenAI states that API data is not used for training unless the account opts in. Default abuse-monitoring logs may retain API content for up to 30 days; rare content-safety review exceptions can apply.
 - Only stable product IDs and quantity are stored in browser session storage.
 - `OPENAI_API_KEY` is read only by the Render server route. It must never be added to GitHub, a client-side environment variable or browser code.

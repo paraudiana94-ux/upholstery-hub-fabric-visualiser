@@ -43,14 +43,16 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
 button,
 a,
 input,
-select {
+select,
+textarea {
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -58,6 +60,7 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
+textarea:focus-visible,
 [tabindex="-1"]:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 4px;
@@ -1356,6 +1359,119 @@ img {
   padding-top: 1rem;
 }
 
+.summary-controls {
+  min-width: 0;
+}
+
+.notes-field {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1.5rem;
+}
+
+.notes-field > label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.notes-field small {
+  color: #686157;
+  font-weight: 600;
+}
+
+.notes-field textarea {
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-small);
+  background: var(--white);
+  color: var(--ink);
+  padding: 0.9rem 1rem;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.notes-field textarea:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.notes-field textarea:disabled {
+  background: #efebe3;
+  color: #676157;
+  cursor: not-allowed;
+}
+
+.notes-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0.45rem 0 1.25rem;
+  color: #686157;
+  font-size: 0.82rem;
+}
+
+.notes-meta span:first-child {
+  max-width: 48ch;
+}
+
+.summary-document-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.5rem;
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 1rem;
+}
+
+.summary-document-header img {
+  width: min(210px, 48%);
+  height: auto;
+}
+
+.summary-document-header > div {
+  display: grid;
+  justify-items: end;
+  color: #625d54;
+  text-align: right;
+}
+
+.summary-document-header .eyebrow {
+  margin-bottom: 0.2rem;
+}
+
+.summary-media {
+  margin: 0 0 1.5rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: #ece7dd;
+}
+
+.summary-media img {
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+}
+
+.summary-media-swatch img {
+  height: 220px;
+  object-fit: cover;
+}
+
+.summary-media figcaption {
+  border-top: 1px solid var(--line);
+  background: var(--white);
+  padding: 0.65rem 0.8rem;
+  color: #625d54;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 .quote-summary h2 {
   margin-bottom: 1.5rem;
 }
@@ -1375,6 +1491,31 @@ img {
 .quote-summary > p {
   color: #625d54;
   font-size: 0.9rem;
+}
+
+.summary-notes,
+.summary-disclaimer {
+  margin-top: 1.25rem;
+  border-left: 4px solid var(--yellow);
+  background: var(--yellow-soft);
+  padding: 1rem 1.1rem;
+}
+
+.summary-notes p,
+.summary-disclaimer p {
+  margin: 0.35rem 0 0;
+  color: #514b42;
+  white-space: pre-wrap;
+}
+
+.summary-disclaimer {
+  border-left-color: var(--ink);
+  background: #f1eee7;
+}
+
+.quote-summary .summary-privacy {
+  margin: 1rem 0 0;
+  font-size: 0.8rem;
 }
 
 .page-actions-left {
@@ -1602,6 +1743,90 @@ img {
   .price-breakdown dd,
   .quote-summary dd {
     text-align: left;
+  }
+
+  .notes-meta,
+  .summary-document-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .summary-document-header > div {
+    justify-items: start;
+    text-align: left;
+  }
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 14mm;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+    color: #161616 !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .skip-link,
+  .app-header,
+  .demo-banner,
+  .progress-nav,
+  .summary-controls,
+  .app-footer {
+    display: none !important;
+  }
+
+  .site-shell,
+  .main-content {
+    width: 100% !important;
+    min-height: 0;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  .quote-layout {
+    display: block;
+  }
+
+  .quote-summary {
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+
+  .summary-document-header,
+  .summary-media,
+  .quote-summary dl div,
+  .summary-notes,
+  .summary-disclaimer {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .summary-media img {
+    max-height: 92mm;
+  }
+
+  .summary-media-swatch img {
+    height: 48mm;
+  }
+
+  .quote-summary h2 {
+    margin-top: 0;
+  }
+
+  .quote-summary dl div {
+    display: flex;
+  }
+
+  .quote-summary dd {
+    text-align: right;
   }
 }
 
