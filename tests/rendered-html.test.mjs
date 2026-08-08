@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { calculateIndicativeEstimate } from "../lib/pricing.ts";
 
@@ -257,6 +258,22 @@ test("preview route blocks unapproved origins before reading data", async () => 
   assert.equal(response.status, 403);
   assert.equal(payload.code, "ORIGIN_NOT_ALLOWED");
   assert.equal(response.headers.get("access-control-allow-origin"), null);
+});
+
+test("testing quota and logo reset stay aligned across server and client", async () => {
+  const [previewSource, visualiserSource, readme] = await Promise.all([
+    readFile(new URL("../worker/preview.ts", import.meta.url), "utf8"),
+    readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../README.md", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(previewSource, /RATE_LIMIT_REQUESTS = 10/);
+  assert.match(previewSource, /allows 10 AI previews per hour/);
+  assert.match(visualiserSource, /limits each visitor to 10 previews per hour/);
+  assert.match(visualiserSource, /function resetJourneyFromLogo\(\)/);
+  assert.match(visualiserSource, /key\.startsWith\("uh-"\)/);
+  assert.match(visualiserSource, /window\.location\.reload\(\)/);
+  assert.match(readme, /allows 10 preview attempts per source IP per hour/);
 });
 
 test("deterministic Armchair pricing matches the approved reversible test", () => {

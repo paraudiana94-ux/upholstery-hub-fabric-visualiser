@@ -6,7 +6,7 @@ const OPENAI_IMAGE_EDIT_URL = "https://api.openai.com/v1/images/edits";
 const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = 12 * 1024 * 1024;
 const MAX_SWATCH_BYTES = 10 * 1024 * 1024;
-const RATE_LIMIT_REQUESTS = 3;
+const RATE_LIMIT_REQUESTS = 10;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -340,7 +340,7 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
       request,
       {
         code: "PREVIEW_RATE_LIMITED",
-        message: "This prototype allows three AI previews per hour. Please try again later.",
+        message: "This prototype allows 10 AI previews per hour. Please try again later.",
       },
       429,
       { "retry-after": String(limit.retryAfter) },

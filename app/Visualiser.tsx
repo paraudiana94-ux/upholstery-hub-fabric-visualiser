@@ -202,15 +202,27 @@ export function Visualiser() {
   }, [step]);
 
   useEffect(() => {
-    window.sessionStorage.setItem("uh-furniture-id", selectedFurnitureId);
+    if (selectedFurnitureId) {
+      window.sessionStorage.setItem("uh-furniture-id", selectedFurnitureId);
+    } else {
+      window.sessionStorage.removeItem("uh-furniture-id");
+    }
   }, [selectedFurnitureId]);
 
   useEffect(() => {
-    window.sessionStorage.setItem("uh-fabric-id", selectedFabricId);
+    if (selectedFabricId) {
+      window.sessionStorage.setItem("uh-fabric-id", selectedFabricId);
+    } else {
+      window.sessionStorage.removeItem("uh-fabric-id");
+    }
   }, [selectedFabricId]);
 
   useEffect(() => {
-    window.sessionStorage.setItem("uh-quantity", String(quantity));
+    if (quantity === 1) {
+      window.sessionStorage.removeItem("uh-quantity");
+    } else {
+      window.sessionStorage.setItem("uh-quantity", String(quantity));
+    }
   }, [quantity]);
 
   useEffect(() => {
@@ -441,7 +453,7 @@ export function Visualiser() {
     go("review");
   }
 
-  function resetJourney() {
+  function clearJourneyState() {
     removePhoto();
     setSelectedFurnitureId("");
     setSelectedFabricId("");
@@ -449,11 +461,23 @@ export function Visualiser() {
     setColourFilter("");
     setPatternFilter("");
     setStockFilter("");
+    setFailedSwatches(new Set());
     setFormError("");
-    window.sessionStorage.removeItem("uh-furniture-id");
-    window.sessionStorage.removeItem("uh-fabric-id");
-    window.sessionStorage.removeItem("uh-quantity");
+    setReconciliationNotice("");
+    Object.keys(window.sessionStorage)
+      .filter((key) => key.startsWith("uh-"))
+      .forEach((key) => window.sessionStorage.removeItem(key));
+  }
+
+  function resetJourney() {
+    clearJourneyState();
     go("start");
+  }
+
+  function resetJourneyFromLogo() {
+    clearJourneyState();
+    window.location.hash = "#/start";
+    window.location.reload();
   }
 
   function markSwatchFailed(id: string) {
@@ -906,7 +930,7 @@ export function Visualiser() {
                   {previewStatus === "generating" ? "Creating preview…" : "Create indicative preview"}
                 </button>
                 <p id="preview-guidance" className="field-help">
-                  Generation may take up to two minutes. This prototype limits each visitor to three previews per hour.
+                  Generation may take up to two minutes. This prototype limits each visitor to 10 previews per hour.
                 </p>
               </>
             ) : (
@@ -1067,7 +1091,7 @@ export function Visualiser() {
       <header className="app-header">
         <a className="brand-link" href="#/start" aria-label="Upholstery Hub home" onClick={(event) => {
           event.preventDefault();
-          go("start");
+          resetJourneyFromLogo();
         }}>
           <picture>
             <source media="(max-width: 480px)" srcSet="branding/UpholsteryHubIcon.png" />
