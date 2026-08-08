@@ -59,7 +59,7 @@ Publishing makes the two demonstration tabs public to anyone with their export U
 - OpenAI states that API data is not used for training unless the account opts in. Default abuse-monitoring logs may retain API content for up to 30 days; rare content-safety review exceptions can apply.
 - Only stable product IDs and quantity are stored in browser session storage.
 - `OPENAI_API_KEY` is read only by the Render server route. It must never be added to GitHub, a client-side environment variable or browser code.
-- The public prototype allows three preview attempts per source IP per hour using an in-memory limiter. Render restarts reset this prototype limiter, so set a strict OpenAI project budget and add durable abuse protection before a wider launch.
+- The public prototype allows 10 preview attempts per source IP per hour using an in-memory limiter to support supervised testing. Render restarts reset this prototype limiter, so set a strict OpenAI project budget and add durable abuse protection before a wider launch.
 
 ## Render configuration
 
