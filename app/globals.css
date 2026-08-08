@@ -206,21 +206,43 @@ img {
 }
 
 .progress-nav li {
-  display: flex;
   min-height: 64px;
-  align-items: center;
-  justify-content: center;
-  gap: 0.65rem;
   border-bottom: 3px solid transparent;
   color: #716b61;
   font-size: 0.9rem;
   font-weight: 650;
 }
 
-.progress-nav li > span {
+.progress-step-button,
+.progress-step-static {
+  display: flex;
+  width: 100%;
+  min-height: 61px;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  border: 0;
+  border-radius: var(--radius-small) var(--radius-small) 0 0;
+  background: transparent;
+  color: inherit;
+  padding: 0.45rem;
+  font: inherit;
+  font-weight: inherit;
+}
+
+.progress-step-button {
+  cursor: pointer;
+}
+
+.progress-step-button:hover {
+  background: var(--yellow-soft);
+}
+
+.progress-marker {
   display: grid;
   width: 28px;
   height: 28px;
+  flex: 0 0 auto;
   place-items: center;
   border: 1px solid var(--line-strong);
   border-radius: 50%;
@@ -234,7 +256,7 @@ img {
   color: var(--ink);
 }
 
-.progress-nav .progress-current > span {
+.progress-nav .progress-current .progress-marker {
   border-color: var(--ink);
   background: var(--ink);
   color: var(--white);
@@ -244,7 +266,7 @@ img {
   color: var(--ink);
 }
 
-.progress-nav .progress-complete > span {
+.progress-nav .progress-complete .progress-marker {
   border-color: #b59000;
   background: var(--yellow);
 }
@@ -936,6 +958,19 @@ img {
 .page-actions {
   justify-content: flex-end;
   margin-top: 2rem;
+}
+
+.card-actions.step-navigation,
+.page-actions.step-navigation {
+  justify-content: space-between;
+}
+
+.step-navigation .navigation-back {
+  margin-right: auto;
+}
+
+.step-navigation .navigation-primary {
+  margin-left: auto;
 }
 
 .filter-panel {
@@ -1917,7 +1952,14 @@ img {
   }
 
   .progress-nav li {
+    min-height: 70px;
+  }
+
+  .progress-step-button,
+  .progress-step-static {
+    min-height: 67px;
     flex-direction: column;
+    gap: 0.25rem;
     padding-block: 0.45rem;
   }
 
@@ -1926,6 +1968,16 @@ img {
   .page-actions .button,
   .inline-actions .button {
     width: 100%;
+  }
+
+  .step-navigation .navigation-primary {
+    order: 1;
+    margin-left: 0;
+  }
+
+  .step-navigation .navigation-back {
+    order: 2;
+    margin-right: 0;
   }
 
   .local-preview {

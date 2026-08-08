@@ -504,6 +504,36 @@ test("testing quota and approved Home and Start Again behaviour stay aligned", a
   assert.match(readme, /allows 10 preview attempts per source IP per hour/);
 });
 
+test("iteration two navigation is destination-specific, editable and safe", async () => {
+  const [visualiserSource, css] = await Promise.all([
+    readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(visualiserSource, /Back to home/);
+  assert.match(visualiserSource, /Back to photo/);
+  assert.match(visualiserSource, /Back to furniture/);
+  assert.match(visualiserSource, /Back to fabrics/);
+  assert.doesNotMatch(visualiserSource, />Back<\/button>/);
+  assert.match(visualiserSource, /Continue to indicative estimate/);
+  assert.match(visualiserSource, /Add a photo first/);
+  assert.match(visualiserSource, /Create indicative AI preview/);
+  assert.doesNotMatch(visualiserSource, /Continue without an AI preview/);
+  assert.match(visualiserSource, /complete && !current/);
+  assert.match(visualiserSource, /className="progress-step-button"/);
+  assert.match(visualiserSource, /aria-label=\{`Edit \$\{item\.label\.toLowerCase\(\)\} step`\}/);
+  assert.match(visualiserSource, /onClick=\{\(\) => go\(item\.id\)\}/);
+  assert.match(visualiserSource, /className="progress-step-static"/);
+  assert.match(visualiserSource, /aria-current=\{current \? "step" : undefined\}/);
+  assert.match(visualiserSource, /window\.history\.pushState/);
+  assert.match(visualiserSource, /addEventListener\("popstate", cancelResetFromBrowserBack\)/);
+  assert.match(visualiserSource, /window\.history\.back\(\)/);
+  assert.match(visualiserSource, /window\.history\.replaceState\(\{\}, "", "#\/start"\)/);
+  assert.match(css, /\.progress-step-button,[\s\S]*min-height: 61px/);
+  assert.match(css, /\.step-navigation \.navigation-primary[\s\S]*order: 1/);
+  assert.match(css, /\.step-navigation \.navigation-back[\s\S]*order: 2/);
+});
+
 test("furniture photo checking is consent-gated and offers a mismatch correction", async () => {
   const [previewSource, visualiserSource, readme] = await Promise.all([
     readFile(new URL("../worker/preview.ts", import.meta.url), "utf8"),

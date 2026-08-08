@@ -192,6 +192,8 @@ export function Visualiser() {
   const resetDialogRef = useRef<HTMLDialogElement>(null);
   const resetSafeButtonRef = useRef<HTMLButtonElement>(null);
   const resetReturnFocusRef = useRef<HTMLElement | null>(null);
+  const resetDialogOpenRef = useRef(false);
+  const resetHistoryEntryRef = useRef(false);
 
   const loadCatalogue = useCallback(async () => {
     setLiveStatus("loading");
@@ -276,6 +278,20 @@ export function Visualiser() {
       dialog.close();
     }
   }, [resetDialogOpen]);
+
+  useEffect(() => {
+    const cancelResetFromBrowserBack = () => {
+      if (!resetDialogOpenRef.current) {
+        return;
+      }
+      resetDialogOpenRef.current = false;
+      resetHistoryEntryRef.current = false;
+      setResetDialogOpen(false);
+      window.requestAnimationFrame(() => resetReturnFocusRef.current?.focus());
+    };
+    window.addEventListener("popstate", cancelResetFromBrowserBack);
+    return () => window.removeEventListener("popstate", cancelResetFromBrowserBack);
+  }, []);
 
   useEffect(() => {
     if (selectedFurnitureId) {
@@ -392,10 +408,9 @@ export function Visualiser() {
     [catalogue, colourFilter, patternFilter, stockFilter],
   );
 
-  const progressIndex = Math.max(
-    0,
-    progressSteps.findIndex((item) => item.id === step),
-  );
+  const progressIndex = step === "result"
+    ? progressSteps.length - 1
+    : progressSteps.findIndex((item) => item.id === step);
 
   function go(next: Step) {
     setFormError("");
@@ -738,18 +753,34 @@ export function Visualiser() {
       return;
     }
     resetReturnFocusRef.current = trigger;
+    resetDialogOpenRef.current = true;
+    resetHistoryEntryRef.current = true;
+    window.history.pushState(
+      { ...(typeof window.history.state === "object" ? window.history.state : {}), upholsteryResetDialog: true },
+      "",
+      window.location.href,
+    );
     setResetDialogOpen(true);
   }
 
   function cancelJourneyReset() {
+    if (resetHistoryEntryRef.current) {
+      resetHistoryEntryRef.current = false;
+      window.history.back();
+      return;
+    }
+    resetDialogOpenRef.current = false;
     setResetDialogOpen(false);
     window.requestAnimationFrame(() => resetReturnFocusRef.current?.focus());
   }
 
   function confirmJourneyReset() {
+    resetDialogOpenRef.current = false;
+    resetHistoryEntryRef.current = false;
     setResetDialogOpen(false);
     clearJourneyState();
-    go("start");
+    window.history.replaceState({}, "", "#/start");
+    setStep("start");
   }
 
   function printProjectSummary() {
@@ -1030,9 +1061,10 @@ export function Visualiser() {
           {localPhoto ? (
             <p className="field-help retention-note">OpenAI may retain API abuse-monitoring content for up to 30 days.</p>
           ) : null}
-          <div className="card-actions">
+          <div className="card-actions step-navigation">
+            <button className="button button-quiet navigation-back" type="button" onClick={() => go("start")}>Back to home</button>
             <button
-              className="button button-dark"
+              className="button button-dark navigation-primary"
               type="button"
               disabled={furnitureCheckStatus === "checking" || Boolean(localPhoto && !aiAcknowledged)}
               onClick={() => void continueFromPhoto()}
@@ -1045,7 +1077,6 @@ export function Visualiser() {
                     : "Check photo and continue"
                   : "Continue without a photo"}
             </button>
-            <button className="button button-quiet" type="button" onClick={() => go("start")}>Back</button>
           </div>
           {localPhoto && !aiAcknowledged ? (
             <p className="field-help consent-help">Confirm permission above to enable the Step 2 furniture check.</p>
@@ -1194,9 +1225,9 @@ export function Visualiser() {
                 onChange={(event) => setQuantity(Number(event.target.value))}
               />
             </div>
-            <div className="page-actions">
-              <button className="button button-quiet" type="button" onClick={() => go("photo")}>Back</button>
-              <button className="button button-dark" type="button" onClick={continueFromFurniture}>Choose a fabric</button>
+            <div className="page-actions step-navigation">
+              <button className="button button-quiet navigation-back" type="button" onClick={() => go("photo")}>Back to photo</button>
+              <button className="button button-dark navigation-primary" type="button" onClick={continueFromFurniture}>Choose a fabric</button>
             </div>
           </>
         ) : null}
@@ -1318,9 +1349,9 @@ export function Visualiser() {
                 </div>
               </div>
             )}
-            <div className="page-actions">
-              <button className="button button-quiet" type="button" onClick={() => go("furniture")}>Back</button>
-              <button className="button button-dark" type="button" onClick={continueFromFabrics}>Review my choices</button>
+            <div className="page-actions step-navigation">
+              <button className="button button-quiet navigation-back" type="button" onClick={() => go("furniture")}>Back to furniture</button>
+              <button className="button button-dark navigation-primary" type="button" onClick={continueFromFabrics}>Review my choices</button>
             </div>
           </>
         ) : null}
@@ -1403,17 +1434,13 @@ export function Visualiser() {
                   aria-describedby="ai-blocked preview-guidance"
                   onClick={() => void createIndicativePreview(Boolean(furnitureSelectionOverride))}
                 >
-                  {previewStatus === "generating" ? "Creating preview…" : "Create indicative preview"}
+                  {previewStatus === "generating" ? "Creating preview…" : "Create indicative AI preview"}
                 </button>
                 <p id="preview-guidance" className="field-help">
                   Generation may take up to two minutes. This prototype limits each visitor to 10 previews per hour.
                 </p>
               </>
-            ) : (
-              <button className="button button-light button-full" type="button" onClick={() => go("photo")}>
-                Add a furniture photo
-              </button>
-            )}
+            ) : null}
             {previewStatus === "generating" ? (
               <div className="preview-status" role="status" aria-live="polite">
                 <span className="status-dot status-dot-loading" aria-hidden="true" />
@@ -1427,17 +1454,22 @@ export function Visualiser() {
               </div>
             ) : null}
             <button
-              className="button button-light button-full"
+              className={`button ${localPhoto ? "button-light" : "button-dark"} button-full`}
               type="button"
               disabled={previewStatus === "generating"}
               onClick={() => go("result")}
             >
-              Continue without an AI preview
+              Continue to indicative estimate
             </button>
+            {!localPhoto ? (
+              <button className="button button-light button-full" type="button" onClick={() => go("photo")}>
+                Add a photo first
+              </button>
+            ) : null}
           </div>
         </div>
-        <div className="page-actions">
-          <button className="button button-quiet" type="button" onClick={() => go("fabrics")} disabled={previewStatus === "generating"}>Back to fabrics</button>
+        <div className="page-actions step-navigation">
+          <button className="button button-quiet navigation-back" type="button" onClick={() => go("fabrics")} disabled={previewStatus === "generating"}>Back to fabrics</button>
         </div>
       </section>
     );
@@ -1542,10 +1574,7 @@ export function Visualiser() {
         </div>
         <div className="page-actions page-actions-prominent">
           <button className="button button-dark button-large" type="button" onClick={() => go("quote")}>View &amp; save project summary</button>
-          <button className="button button-light" type="button" onClick={() => {
-            clearGeneratedPreview();
-            go("fabrics");
-          }}>Try another fabric</button>
+          <button className="button button-light" type="button" onClick={() => go("furniture")}>Edit selections</button>
           <button className="button button-quiet" type="button" onClick={() => go("photo")}>Change photo</button>
         </div>
       </section>
@@ -1740,11 +1769,26 @@ export function Visualiser() {
           <ol>
             {progressSteps.map((item, index) => {
               const current = item.id === step || (step === "result" && item.id === "review");
-              const complete = index < progressIndex || step === "result";
+              const complete = index < progressIndex;
+              const marker = complete ? "✓" : index + 1;
               return (
                 <li key={item.id} className={current ? "progress-current" : complete ? "progress-complete" : ""} aria-current={current ? "step" : undefined}>
-                  <span>{complete && !current ? "✓" : index + 1}</span>
-                  {item.label}
+                  {complete && !current ? (
+                    <button
+                      className="progress-step-button"
+                      type="button"
+                      aria-label={`Edit ${item.label.toLowerCase()} step`}
+                      onClick={() => go(item.id)}
+                    >
+                      <span className="progress-marker">{marker}</span>
+                      <span>{item.label}</span>
+                    </button>
+                  ) : (
+                    <span className="progress-step-static">
+                      <span className="progress-marker">{marker}</span>
+                      <span>{item.label}</span>
+                    </span>
+                  )}
                 </li>
               );
             })}

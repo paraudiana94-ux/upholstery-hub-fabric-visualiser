@@ -19,6 +19,7 @@ The customer-facing deployment is the public GitHub Pages URL. It does not use C
 - After the customer consents in Step 1, the photo is sent to a server-only Render route and classified once with `gpt-5.6-luna`. In Step 2, every furniture choice is immediately compared with that prediction. A mismatch pauses progress and offers the predicted type, a photo change, or a clearly acknowledged manual override. An inconclusive result remains explicitly uncertain. The later optional preview uses the selected live Cloudinary swatch and `gpt-image-2`.
 - The final action is truthfully labelled **View & save project summary**. Customers can add optional browser-local consultation notes and use the native print dialog to print or save a polished PDF summary.
 - The logo and **Home** preserve in-progress choices. Only **Start again** clears browser-local progress, after a confirmation dialog whose safe action receives initial focus.
+- Completed progress steps are keyboard-operable edit controls. Back actions name their destination, the review screen gives the correct forward route primary emphasis, and browser Back safely dismisses the Start Again dialog.
 - Email and quote submission remain visibly unconnected because no verified quotation route has been supplied.
 
 ## Run locally
@@ -40,7 +41,7 @@ npm run lint
 npm run build:pages
 ```
 
-The tests cover server rendering, both published live-tab requests, descriptive-row handling, inactive-row filtering, Cloudinary-only swatch handling, visible failure without substituted rows, unavailable-item guards, approved Home/reset behaviour, truthful summary wording, AI uncertainty and mismatch states, the approved Armchair pricing examples, CORS protection, secret non-disclosure and the live-ID-to-image-edit contract.
+The tests cover server rendering, both published live-tab requests, descriptive-row handling, inactive-row filtering, Cloudinary-only swatch handling, visible failure without substituted rows, unavailable-item guards, approved Home/reset behaviour, editable completed progress steps, destination-specific navigation, truthful summary wording, AI uncertainty and mismatch states, the approved Armchair pricing examples, CORS protection, secret non-disclosure and the live-ID-to-image-edit contract.
 
 ## Live data contract
 
