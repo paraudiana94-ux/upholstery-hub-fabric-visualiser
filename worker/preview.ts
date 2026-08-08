@@ -571,6 +571,19 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
         409,
       );
     }
+    if (photoCheck.status === "uncertain") {
+      return json(
+        request,
+        {
+          code: "FURNITURE_UNCLEAR",
+          message:
+            "We could not confidently identify the furniture type in this photo, so the selection has not been verified.",
+          detectedFurnitureType: photoCheck.detectedFurnitureType,
+          selectedFurnitureType: furniture.name,
+        },
+        409,
+      );
+    }
   }
 
   let swatch: Blob;
@@ -635,7 +648,7 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
   return json(request, {
     imageDataUrl: `data:image/jpeg;base64,${imageBase64}`,
     model: OPENAI_IMAGE_MODEL,
-    furniturePhotoCheck: photoCheck?.status ?? (allowMismatch ? "overridden" : "uncertain"),
+    furniturePhotoCheck: photoCheck?.status ?? "overridden",
     generatedAt: new Date().toISOString(),
     disclaimer:
       "AI-generated indicative preview. Confirm colour, texture and pattern scale with a physical swatch and professional inspection.",

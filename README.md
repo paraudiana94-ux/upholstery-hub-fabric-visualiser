@@ -14,7 +14,7 @@ A focused prototype that helps a customer choose a live upholstery fabric, revie
 - No catalogue or pricing rows are embedded in the application.
 - The two supplied published exports are publicly readable demonstration data and permit browser access from GitHub Pages.
 - The importer locates the actual field-heading row beneath the Sheet's descriptive rows, validates the contract and exposes a truthful error without fallback rows if either source is malformed or unavailable.
-- An optional, consent-gated AI preview sends the customer photo to a server-only Render route. OpenAI first compares the photograph with the selected live furniture type using `gpt-5.6-luna`; a clear mismatch pauses the flow so the customer can correct or explicitly override the selection. A matching or inconclusive check continues to the Image Edits API with the selected live Cloudinary swatch and `gpt-image-2`.
+- An optional, consent-gated AI preview sends the customer photo to a server-only Render route. OpenAI first compares the photograph with the selected live furniture type using `gpt-5.6-luna`; a mismatch or inconclusive result pauses the flow so the customer can correct or explicitly override the selection. A matching check continues to the Image Edits API with the selected live Cloudinary swatch and `gpt-image-2`.
 - The final action is truthfully labelled **View & save project summary**. Customers can add optional browser-local consultation notes and use the native print dialog to print or save a polished PDF summary.
 - Email and quote submission remain visibly unconnected because no verified quotation route has been supplied.
 
@@ -70,7 +70,7 @@ Set `OPENAI_API_KEY` as a secret environment variable in the Render Web Service.
 Routes:
 
 - `GET /api/preview/status`: reports only whether a key is configured, plus the provider and model; it never returns the key.
-- `POST /api/preview`: accepts the consented customer photo plus stable live furniture and fabric IDs, re-reads Google Sheets, checks the dominant photographed furniture against the current live furniture types, and returns HTTP 409 for a confident mismatch. Matching or inconclusive photographs proceed to the current Cloudinary swatch lookup and server-side image-edit request. Customers can explicitly override a warned mismatch.
+- `POST /api/preview`: accepts the consented customer photo plus stable live furniture and fabric IDs, re-reads Google Sheets, checks the dominant photographed furniture against the current live furniture types, and returns HTTP 409 for a mismatch or an inconclusive result. A verified match proceeds to the current Cloudinary swatch lookup and server-side image-edit request. Customers can explicitly override either warning.
 
 The route accepts requests from the published GitHub Pages origin, the Render origin and local development origins. CORS is a browser boundary rather than full abuse protection.
 

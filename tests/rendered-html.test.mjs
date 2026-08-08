@@ -277,6 +277,7 @@ test("preview route pauses when the photographed furniture conflicts with the li
   const worker = await getWorker();
   const originalFetch = globalThis.fetch;
   const requested = [];
+  let classificationConfidence = 0.97;
 
   const fabrics = [
     '"Fabric ID","Fabric Name","Collection","Main Colour","Colour Hex","Pattern","Material","Price per Metre (€)","Suitable Furniture Types","Stock Status","Active","Demo Data","Last Updated","Swatch Image URL"',
@@ -307,7 +308,7 @@ test("preview route pauses when the photographed furniture conflicts with the li
                 type: "output_text",
                 text: JSON.stringify({
                   detectedFurnitureType: "Armchair",
-                  confidence: 0.97,
+                  confidence: classificationConfidence,
                 }),
               },
             ],
@@ -350,6 +351,31 @@ test("preview route pauses when the photographed furniture conflicts with the li
     assert.ok(requested.includes("https://api.openai.com/v1/responses"));
     assert.equal(requested.includes("https://res.cloudinary.com/example/F001.jpg"), false);
     assert.equal(requested.includes("https://api.openai.com/v1/images/edits"), false);
+
+    classificationConfidence = 0.5;
+    const uncertainForm = new FormData();
+    uncertainForm.append(
+      "photo",
+      new File(["customer-photo"], "chair.jpg", { type: "image/jpeg" }),
+    );
+    uncertainForm.append("fabricId", "F001");
+    uncertainForm.append("furnitureId", "FT003");
+    const uncertainResponse = await worker.fetch(
+      new Request("http://localhost/api/preview", {
+        method: "POST",
+        headers: {
+          origin: "https://paraudiana94-ux.github.io",
+          "x-forwarded-for": "192.0.2.12",
+        },
+        body: uncertainForm,
+      }),
+      { ...runtime, OPENAI_API_KEY: "test-key" },
+      context,
+    );
+    const uncertainPayload = await uncertainResponse.json();
+    assert.equal(uncertainResponse.status, 409);
+    assert.equal(uncertainPayload.code, "FURNITURE_UNCLEAR");
+    assert.match(uncertainPayload.message, /could not confidently identify/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -403,7 +429,7 @@ test("furniture photo checking is consent-gated and offers a mismatch correction
   assert.match(visualiserSource, /Check your furniture selection/);
   assert.match(visualiserSource, /Change furniture type/);
   assert.match(visualiserSource, /Use \{furnitureMismatch\.selectedFurnitureType\} anyway/);
-  assert.match(readme, /clear mismatch pauses the flow/);
+  assert.match(readme, /mismatch or inconclusive result pauses the flow/);
 });
 
 test("project summary is local, printable and truthfully labelled", async () => {

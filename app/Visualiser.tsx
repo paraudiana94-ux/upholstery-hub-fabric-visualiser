@@ -429,7 +429,8 @@ export function Visualiser() {
           response.status === 409 &&
           payload &&
           "code" in payload &&
-          payload.code === "FURNITURE_MISMATCH" &&
+          (payload.code === "FURNITURE_MISMATCH" ||
+            payload.code === "FURNITURE_UNCLEAR") &&
           payload.message &&
           payload.detectedFurnitureType &&
           payload.selectedFurnitureType
