@@ -26,12 +26,12 @@ interface OpenAIImageResponse {
 
 const rateLimits = new Map<string, RateLimitEntry>();
 
-function getApiKey(env: PreviewEnv): string {
+function getApiKey(env?: PreviewEnv): string {
   const runtime = globalThis as typeof globalThis & {
     process?: { env?: Record<string, string | undefined> };
   };
   return (
-    env.OPENAI_API_KEY?.trim() ||
+    env?.OPENAI_API_KEY?.trim() ||
     runtime.process?.env?.OPENAI_API_KEY?.trim() ||
     ""
   );
@@ -208,7 +208,7 @@ function openAIErrorResponse(
   );
 }
 
-export function getPreviewStatus(request: Request, env: PreviewEnv): Response {
+export function getPreviewStatus(request: Request, env?: PreviewEnv): Response {
   return json(request, {
     configured: Boolean(getApiKey(env)),
     provider: "OpenAI",
@@ -228,7 +228,7 @@ export function getPreviewOptions(request: Request): Response {
   return new Response(null, { status: 204, headers: corsHeaders(request) });
 }
 
-export async function createPreview(request: Request, env: PreviewEnv): Promise<Response> {
+export async function createPreview(request: Request, env?: PreviewEnv): Promise<Response> {
   const origin = request.headers.get("origin") ?? "";
   if (origin && !isAllowedOrigin(origin)) {
     return json(

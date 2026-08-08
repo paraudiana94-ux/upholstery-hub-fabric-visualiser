@@ -152,6 +152,20 @@ test("preview status reports configuration without exposing the server key", asy
   );
 });
 
+test("preview status tolerates vinext production calls without a worker env binding", async () => {
+  const worker = await getWorker();
+  const response = await worker.fetch(
+    new Request("http://localhost/api/preview/status"),
+    undefined,
+    context,
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.configured, Boolean(process.env.OPENAI_API_KEY));
+  assert.equal(payload.model, "gpt-image-2");
+});
+
 test("preview route resolves live IDs and sends the customer photo plus live Cloudinary swatch", async () => {
   const worker = await getWorker();
   const originalFetch = globalThis.fetch;
