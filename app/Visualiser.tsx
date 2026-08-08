@@ -603,9 +603,6 @@ export function Visualiser() {
             <button className="button button-dark button-large" type="button" onClick={() => go("photo")}>
               Start visualising
             </button>
-            <button className="button button-light button-large" type="button" onClick={() => go("quote")}>
-              Prepare a project summary
-            </button>
           </div>
           <p className="trust-line">
             <span aria-hidden="true">✓</span> No account required. Selecting a photograph keeps it local until you consent and request an AI preview.
