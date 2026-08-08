@@ -9,6 +9,7 @@ import {
   createPreview,
   getPreviewOptions,
   getPreviewStatus,
+  identifyFurniture,
 } from "./preview";
 
 interface Env {
@@ -89,6 +90,19 @@ const worker = {
         });
       }
       return getPreviewStatus(request, env);
+    }
+
+    if (url.pathname === "/api/furniture-check") {
+      if (request.method === "OPTIONS") {
+        return getPreviewOptions(request);
+      }
+      if (request.method !== "POST") {
+        return new Response("Method not allowed", {
+          status: 405,
+          headers: { allow: "POST, OPTIONS" },
+        });
+      }
+      return identifyFurniture(request, env);
     }
 
     if (url.pathname === "/api/preview") {

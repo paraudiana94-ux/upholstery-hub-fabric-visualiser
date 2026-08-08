@@ -6,6 +6,8 @@ A focused prototype that helps a customer choose a live upholstery fabric, revie
 - GitHub Pages: <https://paraudiana94-ux.github.io/upholstery-hub-fabric-visualiser/>
 - Secure AI service: <https://upholstery-hub-fabric-visualiser.onrender.com>
 
+The customer-facing deployment is the public GitHub Pages URL. It does not use ChatGPT authentication and visitors do not need a ChatGPT or OpenAI account. Render supplies only the secure server-side API routes.
+
 ## Current implementation status
 
 - The approved guided journey, local photograph preview, live-data states, deterministic pricing and responsive brand system are implemented.
@@ -14,7 +16,7 @@ A focused prototype that helps a customer choose a live upholstery fabric, revie
 - No catalogue or pricing rows are embedded in the application.
 - The two supplied published exports are publicly readable demonstration data and permit browser access from GitHub Pages.
 - The importer locates the actual field-heading row beneath the Sheet's descriptive rows, validates the contract and exposes a truthful error without fallback rows if either source is malformed or unavailable.
-- An optional, consent-gated AI preview sends the customer photo to a server-only Render route. OpenAI first compares the photograph with the selected live furniture type using `gpt-5.6-luna`; a mismatch or inconclusive result pauses the flow so the customer can correct or explicitly override the selection. A matching check continues to the Image Edits API with the selected live Cloudinary swatch and `gpt-image-2`.
+- After the customer consents in Step 1, the photo is sent to a server-only Render route and classified once with `gpt-5.6-luna`. In Step 2, every furniture choice is immediately compared with that result. A mismatch is rejected with a visible correction, while an inconclusive result requires explicit confirmation. The later optional preview uses the selected live Cloudinary swatch and `gpt-image-2`.
 - The final action is truthfully labelled **View & save project summary**. Customers can add optional browser-local consultation notes and use the native print dialog to print or save a polished PDF summary.
 - Email and quote submission remain visibly unconnected because no verified quotation route has been supplied.
 
@@ -55,7 +57,7 @@ Publishing makes the two demonstration tabs public to anyone with their export U
 ## Privacy and security
 
 - Customer photographs are validated and previewed with a local object URL.
-- Selecting a photograph does not upload it. Only pressing **Check photo & create preview** after accepting the consent statement sends it to the Render service and OpenAI for furniture-type checking and preview generation.
+- Selecting a photograph does not upload it. After accepting the Step 1 permission statement, pressing **Check photo and continue** sends it to the Render service and OpenAI for one furniture-type check. The result remains only in browser memory and is used to validate Step 2 choices immediately.
 - The application does not write customer photographs to disk, application storage, logs or Google Sheets. The generated image remains in browser memory and is lost on refresh.
 - Optional consultation notes remain in component memory, appear only in the printable summary and are cleared with the journey. They are not emailed or submitted.
 - OpenAI states that API data is not used for training unless the account opts in. Default abuse-monitoring logs may retain API content for up to 30 days; rare content-safety review exceptions can apply.
@@ -70,7 +72,8 @@ Set `OPENAI_API_KEY` as a secret environment variable in the Render Web Service.
 Routes:
 
 - `GET /api/preview/status`: reports only whether a key is configured, plus the provider and model; it never returns the key.
-- `POST /api/preview`: accepts the consented customer photo plus stable live furniture and fabric IDs, re-reads Google Sheets, checks the dominant photographed furniture against the current live furniture types, and returns HTTP 409 for a mismatch or an inconclusive result. A verified match proceeds to the current Cloudinary swatch lookup and server-side image-edit request. Customers can explicitly override either warning.
+- `POST /api/furniture-check`: accepts the consented customer photo before Step 2, re-reads the live furniture types and returns only the structured identification result. It does not generate an image or fetch a fabric swatch.
+- `POST /api/preview`: accepts the consented customer photo plus stable live furniture and fabric IDs, re-reads Google Sheets, fetches the current Cloudinary swatch and makes the server-side image-edit request. The route retains server-side furniture-check support as a fallback for direct calls.
 
 The route accepts requests from the published GitHub Pages origin, the Render origin and local development origins. CORS is a browser boundary rather than full abuse protection.
 
@@ -83,7 +86,6 @@ The route accepts requests from the published GitHub Pages origin, the Render or
 - `worker/index.ts`: live Google Sheets reader and failure contract
 - `worker/preview.ts`: consented Render/OpenAI image-edit boundary, CORS, validation and prototype rate limit
 - `tests/rendered-html.test.mjs`: reproducible build and behaviour checks
-- `.openai/hosting.json`: Sites hosting declaration
 - `github-pages/index.html` and `github-pages/main.tsx`: GitHub Pages client entry
 - `vite.pages.config.ts`: static Pages build configuration
 - `.github/workflows/deploy-pages.yml`: GitHub Pages deployment workflow

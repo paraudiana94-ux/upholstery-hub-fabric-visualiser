@@ -12,6 +12,7 @@ import {
 import {
   fetchPublishedCatalogue,
   type CataloguePayload,
+  type FurnitureType,
 } from "@/lib/catalogue";
 import { calculateIndicativeEstimate } from "@/lib/pricing";
 
@@ -38,20 +39,35 @@ interface GeneratedPreview {
   disclaimer: string;
 }
 
-type PreviewStatus = "idle" | "generating" | "ready" | "mismatch" | "error";
+type PreviewStatus = "idle" | "generating" | "ready" | "error";
 
 interface PreviewErrorPayload {
   code?: string;
   message?: string;
-  detectedFurnitureType?: string;
-  selectedFurnitureType?: string;
 }
 
-interface FurnitureMismatch {
-  message: string;
+interface FurniturePhotoClassification {
+  status: "identified" | "uncertain";
   detectedFurnitureType: string;
-  selectedFurnitureType: string;
+  confidence: number;
+  model: string;
 }
+
+interface FurnitureCheckPayload extends PreviewErrorPayload {
+  status?: "identified" | "uncertain";
+  confidence?: number;
+  model?: string;
+}
+
+interface FurnitureSelectionAlert {
+  kind: "mismatch" | "uncertain";
+  selectedFurnitureId: string;
+  selectedFurnitureName: string;
+  message: string;
+  detectedFurnitureType?: string;
+}
+
+type FurnitureCheckStatus = "idle" | "checking" | "ready" | "error";
 
 const steps: Step[] = [
   "start",
@@ -140,12 +156,17 @@ export function Visualiser() {
   const [failedSwatches, setFailedSwatches] = useState<Set<string>>(new Set());
   const [formError, setFormError] = useState("");
   const [aiAcknowledged, setAiAcknowledged] = useState(false);
+  const [furnitureCheckStatus, setFurnitureCheckStatus] =
+    useState<FurnitureCheckStatus>("idle");
+  const [furnitureCheckError, setFurnitureCheckError] = useState("");
+  const [furniturePhotoClassification, setFurniturePhotoClassification] =
+    useState<FurniturePhotoClassification | null>(null);
+  const [furnitureSelectionAlert, setFurnitureSelectionAlert] =
+    useState<FurnitureSelectionAlert | null>(null);
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("idle");
   const [generatedPreview, setGeneratedPreview] =
     useState<GeneratedPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
-  const [furnitureMismatch, setFurnitureMismatch] =
-    useState<FurnitureMismatch | null>(null);
   const [customerNotes, setCustomerNotes] = useState("");
   const [reconciliationNotice, setReconciliationNotice] = useState("");
 
@@ -338,7 +359,13 @@ export function Visualiser() {
     setGeneratedPreview(null);
     setPreviewStatus("idle");
     setPreviewError("");
-    setFurnitureMismatch(null);
+  }
+
+  function clearFurniturePhotoCheck() {
+    setFurnitureCheckStatus("idle");
+    setFurnitureCheckError("");
+    setFurniturePhotoClassification(null);
+    setFurnitureSelectionAlert(null);
     setAiAcknowledged(false);
   }
 
@@ -349,6 +376,8 @@ export function Visualiser() {
     setLocalPhoto(null);
     setPhotoError("");
     clearGeneratedPreview();
+    clearFurniturePhotoCheck();
+    setSelectedFurnitureId("");
     setPhotoInputKey((current) => current + 1);
   }
 
@@ -381,9 +410,143 @@ export function Visualiser() {
       }
       setLocalPhoto({ url: objectUrl, name: file.name, size: file.size, file });
       clearGeneratedPreview();
+      clearFurniturePhotoCheck();
+      setSelectedFurnitureId("");
     } catch {
       URL.revokeObjectURL(objectUrl);
       setPhotoError("We could not read this photo. Try another image.");
+    }
+  }
+
+  async function continueFromPhoto() {
+    setPhotoError("");
+    if (!localPhoto) {
+      clearFurniturePhotoCheck();
+      go("furniture");
+      return;
+    }
+    if (!aiAcknowledged) {
+      setPhotoError(
+        "Confirm that you have permission to use this photo before continuing with automatic furniture checking.",
+      );
+      return;
+    }
+    if (furnitureCheckStatus === "ready" && furniturePhotoClassification) {
+      go("furniture");
+      return;
+    }
+
+    setFurnitureCheckStatus("checking");
+    setFurnitureCheckError("");
+    setFurnitureSelectionAlert(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 45_000);
+    const endpoint = window.location.hostname.endsWith("github.io")
+      ? "https://upholstery-hub-fabric-visualiser.onrender.com/api/furniture-check"
+      : "/api/furniture-check";
+    const body = new FormData();
+    body.append("photo", localPhoto.file, localPhoto.name);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        body,
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | FurnitureCheckPayload
+        | null;
+      if (
+        !response.ok ||
+        !payload?.status ||
+        !payload.detectedFurnitureType ||
+        typeof payload.confidence !== "number" ||
+        !payload.model
+      ) {
+        throw new Error(
+          payload?.message ??
+            "We could not check this photo automatically. You can still choose a furniture type.",
+        );
+      }
+      setFurniturePhotoClassification({
+        status: payload.status,
+        detectedFurnitureType: payload.detectedFurnitureType,
+        confidence: payload.confidence,
+        model: payload.model,
+      });
+      setFurnitureCheckStatus("ready");
+    } catch (error) {
+      setFurniturePhotoClassification(null);
+      setFurnitureCheckStatus("error");
+      setFurnitureCheckError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The automatic furniture check took too long. You can still choose a type, or return to the photo and try again."
+          : error instanceof Error
+            ? error.message
+            : "We could not check this photo automatically. You can still choose a furniture type.",
+      );
+    } finally {
+      window.clearTimeout(timeout);
+    }
+    go("furniture");
+  }
+
+  function acceptFurnitureSelection(item: FurnitureType) {
+    setSelectedFurnitureId(item.id);
+    setFurnitureSelectionAlert(null);
+    clearGeneratedPreview();
+    setFormError("");
+  }
+
+  function selectFurnitureType(item: FurnitureType) {
+    if (!localPhoto || !furniturePhotoClassification) {
+      acceptFurnitureSelection(item);
+      return;
+    }
+
+    setSelectedFurnitureId("");
+    clearGeneratedPreview();
+    setFormError("");
+    if (furniturePhotoClassification.status === "uncertain") {
+      setFurnitureSelectionAlert({
+        kind: "uncertain",
+        selectedFurnitureId: item.id,
+        selectedFurnitureName: item.name,
+        message:
+          "We could not confidently identify the item in your photo, so this furniture selection cannot be verified automatically.",
+      });
+      return;
+    }
+
+    if (furniturePhotoClassification.detectedFurnitureType !== item.name) {
+      setFurnitureSelectionAlert({
+        kind: "mismatch",
+        selectedFurnitureId: item.id,
+        selectedFurnitureName: item.name,
+        detectedFurnitureType: furniturePhotoClassification.detectedFurnitureType,
+        message: `Your photo appears to show “${furniturePhotoClassification.detectedFurnitureType}”, not “${item.name}”. Choose the matching furniture type for an accurate estimate.`,
+      });
+      return;
+    }
+
+    acceptFurnitureSelection(item);
+  }
+
+  function acceptFurnitureOverride() {
+    const item = catalogue?.furniture.find(
+      (candidate) => candidate.id === furnitureSelectionAlert?.selectedFurnitureId,
+    );
+    if (item) {
+      acceptFurnitureSelection(item);
+    }
+  }
+
+  function acceptDetectedFurniture() {
+    const item = catalogue?.furniture.find(
+      (candidate) => candidate.name === furnitureSelectionAlert?.detectedFurnitureType,
+    );
+    if (item) {
+      acceptFurnitureSelection(item);
     }
   }
 
@@ -398,7 +561,6 @@ export function Visualiser() {
 
     setPreviewStatus("generating");
     setPreviewError("");
-    setFurnitureMismatch(null);
     setGeneratedPreview(null);
 
     const controller = new AbortController();
@@ -425,24 +587,6 @@ export function Visualiser() {
         | PreviewErrorPayload
         | null;
       if (!response.ok || !payload || !("imageDataUrl" in payload)) {
-        if (
-          response.status === 409 &&
-          payload &&
-          "code" in payload &&
-          (payload.code === "FURNITURE_MISMATCH" ||
-            payload.code === "FURNITURE_UNCLEAR") &&
-          payload.message &&
-          payload.detectedFurnitureType &&
-          payload.selectedFurnitureType
-        ) {
-          setFurnitureMismatch({
-            message: payload.message,
-            detectedFurnitureType: payload.detectedFurnitureType,
-            selectedFurnitureType: payload.selectedFurnitureType,
-          });
-          setPreviewStatus("mismatch");
-          return;
-        }
         throw new Error(
           payload && "message" in payload && payload.message
             ? payload.message
@@ -638,7 +782,7 @@ export function Visualiser() {
             </button>
           </div>
           <p className="trust-line">
-            <span aria-hidden="true">✓</span> No account required. Selecting a photograph keeps it local until you consent and request an AI preview.
+            <span aria-hidden="true">✓</span> No account required. A photograph stays local until you consent and continue to automatic furniture checking.
           </p>
         </div>
         <div className="process-card" aria-label="How the prototype works">
@@ -681,7 +825,7 @@ export function Visualiser() {
           </p>
           <div className="privacy-note">
             <strong>Selecting a photo does not send it anywhere.</strong>
-            <p>The file stays in this browser session until you explicitly consent and press “Create indicative preview”. You can remove it at any time.</p>
+            <p>The file stays in this browser session until you explicitly consent and continue. It is then sent securely through Render to OpenAI so Step 2 can check your furniture selection. You can remove it at any time.</p>
           </div>
         </div>
         <div className="step-card">
@@ -706,19 +850,55 @@ export function Visualiser() {
               <img src={localPhoto.url} alt="Your uploaded furniture photograph" />
               <div>
                 <strong>{localPhoto.name}</strong>
-                <span>{fileSize(localPhoto.size)} · Not sent</span>
+                <span>{fileSize(localPhoto.size)} · {furnitureCheckStatus === "ready" ? "Checked securely" : "Not sent"}</span>
                 <button className="text-button text-button-danger" type="button" onClick={removePhoto}>
                   Remove photo
                 </button>
               </div>
             </div>
           ) : null}
+          {localPhoto ? (
+            <label className="acknowledgement photo-check-consent">
+              <input
+                type="checkbox"
+                checked={aiAcknowledged}
+                disabled={furnitureCheckStatus === "checking"}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setAiAcknowledged(checked);
+                  if (!checked) {
+                    setFurnitureCheckStatus("idle");
+                    setFurnitureCheckError("");
+                    setFurniturePhotoClassification(null);
+                    setFurnitureSelectionAlert(null);
+                  }
+                }}
+              />
+              <span>
+                I have permission to use this photo and agree to send it to Upholstery Hub’s Render service and OpenAI when I continue, to identify the furniture type and, if I later request it, generate an indicative fabric preview. OpenAI may retain API abuse-monitoring content for up to 30 days.
+              </span>
+            </label>
+          ) : null}
           <div className="card-actions">
-            <button className="button button-dark" type="button" onClick={() => go("furniture")}>
-              {localPhoto ? "Continue with this photo" : "Continue without a photo"}
+            <button
+              className="button button-dark"
+              type="button"
+              disabled={furnitureCheckStatus === "checking" || Boolean(localPhoto && !aiAcknowledged)}
+              onClick={() => void continueFromPhoto()}
+            >
+              {furnitureCheckStatus === "checking"
+                ? "Checking furniture type…"
+                : localPhoto
+                  ? furnitureCheckStatus === "ready"
+                    ? "Continue to furniture"
+                    : "Check photo and continue"
+                  : "Continue without a photo"}
             </button>
             <button className="button button-quiet" type="button" onClick={() => go("start")}>Back</button>
           </div>
+          {localPhoto && !aiAcknowledged ? (
+            <p className="field-help consent-help">Confirm permission above to enable the Step 2 furniture check.</p>
+          ) : null}
         </div>
       </section>
     );
@@ -738,9 +918,62 @@ export function Visualiser() {
         <LiveDataPanel />
         {reconciliationNotice ? <p className="notice" role="status">{reconciliationNotice}</p> : null}
         <ErrorSummary />
+        {localPhoto && furnitureCheckStatus === "ready" ? (
+          <div className="state-panel photo-check-ready" role="status">
+            <span className="status-dot status-dot-ready" aria-hidden="true" />
+            <div>
+              <strong>Photo check ready</strong>
+              <p>Your choice will be compared with the furniture identified in the uploaded photograph.</p>
+            </div>
+          </div>
+        ) : null}
+        {localPhoto && furnitureCheckStatus === "error" && furnitureCheckError ? (
+          <div className="state-panel state-panel-warning" role="alert">
+            <span className="status-dot status-dot-warning" aria-hidden="true" />
+            <div>
+              <strong>Automatic furniture checking is unavailable</strong>
+              <p>{furnitureCheckError}</p>
+              <button className="button button-light" type="button" onClick={() => go("photo")}>
+                Return to photo and retry
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {furnitureSelectionAlert ? (
+          <div
+            className={`state-panel ${furnitureSelectionAlert.kind === "mismatch" ? "state-panel-error" : "state-panel-warning"} furniture-selection-alert`}
+            role="alert"
+          >
+            <span className={`status-dot ${furnitureSelectionAlert.kind === "mismatch" ? "status-dot-error" : "status-dot-warning"}`} aria-hidden="true" />
+            <div>
+              <strong>
+                {furnitureSelectionAlert.kind === "mismatch"
+                  ? "This selection does not match your photo"
+                  : "Please confirm this furniture selection"}
+              </strong>
+              <p>{furnitureSelectionAlert.message}</p>
+              <div className="furniture-alert-actions">
+                {furnitureSelectionAlert.detectedFurnitureType &&
+                catalogue?.furniture.some(
+                  (item) => item.name === furnitureSelectionAlert.detectedFurnitureType,
+                ) ? (
+                  <button className="button button-dark" type="button" onClick={acceptDetectedFurniture}>
+                    Choose {furnitureSelectionAlert.detectedFurnitureType}
+                  </button>
+                ) : null}
+                <button className="button button-light" type="button" onClick={acceptFurnitureOverride}>
+                  Use {furnitureSelectionAlert.selectedFurnitureName} anyway
+                </button>
+                <button className="button button-quiet" type="button" onClick={() => go("photo")}>
+                  Change photo
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {catalogue ? (
           <>
-            <fieldset className="choice-grid furniture-grid">
+            <fieldset className="choice-grid furniture-grid" aria-describedby="furniture-photo-check-help">
               <legend>Active furniture types</legend>
               {catalogue.furniture.map((item) => (
                 <label className={`choice-card ${selectedFurnitureId === item.id ? "choice-card-selected" : ""}`} key={item.id}>
@@ -749,11 +982,7 @@ export function Visualiser() {
                     name="furniture-type"
                     value={item.id}
                     checked={selectedFurnitureId === item.id}
-                    onChange={() => {
-                      setSelectedFurnitureId(item.id);
-                      clearGeneratedPreview();
-                      setFormError("");
-                    }}
+                    onChange={() => selectFurnitureType(item)}
                   />
                   <span className="choice-check" aria-hidden="true" />
                   <span className="choice-card-kicker">{item.id} · Demo data</span>
@@ -764,6 +993,11 @@ export function Visualiser() {
                 </label>
               ))}
             </fieldset>
+            <p id="furniture-photo-check-help" className="field-help furniture-check-help">
+              {localPhoto
+                ? "Selections are checked against your consented photograph before pricing assumptions are applied."
+                : "No photo was supplied, so choose the furniture type manually."}
+            </p>
             <div className="quantity-row">
               <div>
                 <label htmlFor="quantity"><strong>Quantity</strong></label>
@@ -951,32 +1185,22 @@ export function Visualiser() {
             <span className="eyebrow">AI preview status</span>
             <h2>{localPhoto ? "Create an indicative preview" : "Add a photo to create a preview"}</h2>
             <p id="ai-blocked">
-              The secure Render service first checks whether the furniture in your photo matches your selected type. If it matches, OpenAI applies the selected live Cloudinary swatch. Results can alter details and are not a finished-work guarantee.
+              Your furniture choice was handled in Step 2. The secure Render service now uses OpenAI to apply the selected live Cloudinary swatch. Results can alter details and are not a finished-work guarantee.
             </p>
             {localPhoto ? (
               <>
-                <label className="acknowledgement">
-                  <input
-                    type="checkbox"
-                    checked={aiAcknowledged}
-                    disabled={previewStatus === "generating"}
-                    onChange={(event) => setAiAcknowledged(event.target.checked)}
-                  />
-                  <span>
-                    I have permission to use this photo and agree to send it, plus the selected public fabric swatch, to Upholstery Hub’s Render service and OpenAI to check the furniture type and generate an indicative preview. OpenAI may retain API abuse-monitoring content for up to 30 days.
-                  </span>
-                </label>
+                <p className="consent-confirmation"><span aria-hidden="true">✓</span> Photo permission confirmed before the Step 2 furniture check.</p>
                 <button
                   className="button button-dark button-full"
                   type="button"
-                  disabled={!aiAcknowledged || previewStatus === "generating"}
+                  disabled={previewStatus === "generating"}
                   aria-describedby="ai-blocked preview-guidance"
-                  onClick={() => void createIndicativePreview()}
+                  onClick={() => void createIndicativePreview(true)}
                 >
-                  {previewStatus === "generating" ? "Checking photo and creating preview…" : "Check photo & create preview"}
+                  {previewStatus === "generating" ? "Creating preview…" : "Create indicative preview"}
                 </button>
                 <p id="preview-guidance" className="field-help">
-                  The furniture check and generation may take up to three minutes. This prototype limits each visitor to 10 preview attempts per hour.
+                  Generation may take up to two minutes. This prototype limits each visitor to 10 previews per hour.
                 </p>
               </>
             ) : (
@@ -987,24 +1211,7 @@ export function Visualiser() {
             {previewStatus === "generating" ? (
               <div className="preview-status" role="status" aria-live="polite">
                 <span className="status-dot status-dot-loading" aria-hidden="true" />
-                <span>Checking the furniture type, then creating your indicative preview securely. Keep this page open.</span>
-              </div>
-            ) : null}
-            {previewStatus === "mismatch" && furnitureMismatch ? (
-              <div className="preview-status preview-status-warning" role="alert">
-                <span className="status-dot status-dot-warning" aria-hidden="true" />
-                <div className="furniture-mismatch-copy">
-                  <strong>Check your furniture selection</strong>
-                  <p>{furnitureMismatch.message} Change the selection for a more accurate estimate and preview.</p>
-                  <div className="mismatch-actions">
-                    <button className="button button-dark" type="button" onClick={() => go("furniture")}>
-                      Change furniture type
-                    </button>
-                    <button className="button button-light" type="button" onClick={() => void createIndicativePreview(true)}>
-                      Use {furnitureMismatch.selectedFurnitureType} anyway
-                    </button>
-                  </div>
-                </div>
+                <span>Creating your indicative preview securely. Keep this page open.</span>
               </div>
             ) : null}
             {previewStatus === "error" && previewError ? (

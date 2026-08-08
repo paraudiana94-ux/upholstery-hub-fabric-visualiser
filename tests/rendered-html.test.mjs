@@ -37,7 +37,7 @@ test("server-renders the finished Upholstery Hub product shell", async () => {
   assert.match(html, /<title>Fabric Visualiser \| Upholstery Hub<\/title>/i);
   assert.match(html, /See a possible new look for your furniture/);
   assert.match(html, /Prototype demonstration/);
-  assert.match(html, /Selecting a photograph keeps it local until you consent/);
+  assert.match(html, /A photograph stays local until you consent/);
   assert.match(html, /UpholsteryHubLogo-Horizontal\.png/);
   assert.doesNotMatch(html, /codex-preview|Your site is taking shape|react-loading-skeleton/i);
 });
@@ -167,6 +167,91 @@ test("preview status tolerates vinext production calls without a worker env bind
   assert.equal(payload.configured, Boolean(process.env.OPENAI_API_KEY));
   assert.equal(payload.model, "gpt-image-2");
   assert.equal(payload.furnitureCheckModel, "gpt-5.6-luna");
+});
+
+test("furniture check identifies the photo before Step 2 without requesting a swatch", async () => {
+  const worker = await getWorker();
+  const originalFetch = globalThis.fetch;
+  const requested = [];
+  const fabrics = [
+    '"Fabric ID","Fabric Name","Collection","Main Colour","Colour Hex","Pattern","Material","Price per Metre (€)","Suitable Furniture Types","Stock Status","Active","Demo Data","Last Updated","Swatch Image URL"',
+    '"F001","Test Linen","Demo","Sand","#D7C4A3","Plain","Blend","28","Armchair","In Stock","TRUE","TRUE","2026-08-06","https://res.cloudinary.com/example/F001.jpg"',
+  ].join("\n");
+  const furniture = [
+    '"Furniture Type ID","Furniture Type","Min Estimated Metres","Max Estimated Metres","Starting Labour Cost (€)","Min Turnaround Weeks","Max Turnaround Weeks","Special Considerations","Active","Demo Data","Last Updated"',
+    '"FT002","Armchair","5","7","550","4","6","Inspection required","TRUE","TRUE","2026-08-06"',
+    '"FT006","Double or King Headboard","4","6","400","3","5","Inspection required","TRUE","TRUE","2026-08-06"',
+  ].join("\n");
+
+  globalThis.fetch = async (input, init) => {
+    const url = String(input);
+    requested.push(url);
+    if (url.includes("gid=441339050")) {
+      return new Response(fabrics, { headers: { "content-type": "text/csv" } });
+    }
+    if (url.includes("gid=589043625")) {
+      return new Response(furniture, { headers: { "content-type": "text/csv" } });
+    }
+    if (url === "https://api.openai.com/v1/responses") {
+      const requestBody = JSON.parse(String(init?.body));
+      assert.equal(requestBody.model, "gpt-5.6-luna");
+      assert.match(requestBody.input[0].content[0].text, /No furniture type has been selected yet/);
+      assert.ok(
+        requestBody.text.format.schema.properties.detectedFurnitureType.enum.includes(
+          "Double or King Headboard",
+        ),
+      );
+      return Response.json({
+        output: [
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: JSON.stringify({
+                  detectedFurnitureType: "Armchair",
+                  confidence: 0.98,
+                }),
+              },
+            ],
+          },
+        ],
+      });
+    }
+    throw new Error(`Unexpected furniture-check fetch: ${url}`);
+  };
+
+  const form = new FormData();
+  form.append(
+    "photo",
+    new File(["customer-photo"], "chair.jpg", { type: "image/jpeg" }),
+  );
+
+  try {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/furniture-check", {
+        method: "POST",
+        headers: {
+          origin: "https://paraudiana94-ux.github.io",
+          "x-forwarded-for": "192.0.2.20",
+        },
+        body: form,
+      }),
+      { ...runtime, OPENAI_API_KEY: "test-key" },
+      context,
+    );
+    const payload = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.status, "identified");
+    assert.equal(payload.detectedFurnitureType, "Armchair");
+    assert.equal(payload.model, "gpt-5.6-luna");
+    assert.ok(requested.includes("https://api.openai.com/v1/responses"));
+    assert.equal(requested.some((url) => url.includes("res.cloudinary.com")), false);
+    assert.equal(requested.includes("https://api.openai.com/v1/images/edits"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("preview route resolves live IDs and sends the customer photo plus live Cloudinary swatch", async () => {
@@ -407,7 +492,7 @@ test("testing quota and logo reset stay aligned across server and client", async
 
   assert.match(previewSource, /RATE_LIMIT_REQUESTS = 10/);
   assert.match(previewSource, /allows 10 AI previews per hour/);
-  assert.match(visualiserSource, /limits each visitor to 10 preview attempts per hour/);
+  assert.match(visualiserSource, /limits each visitor to 10 previews per hour/);
   assert.match(visualiserSource, /function resetJourneyFromLogo\(\)/);
   assert.match(visualiserSource, /key\.startsWith\("uh-"\)/);
   assert.match(visualiserSource, /window\.location\.reload\(\)/);
@@ -423,13 +508,17 @@ test("furniture photo checking is consent-gated and offers a mismatch correction
 
   assert.match(previewSource, /OPENAI_FURNITURE_CHECK_MODEL = "gpt-5\.6-luna"/);
   assert.match(previewSource, /FURNITURE_MISMATCH/);
+  assert.match(previewSource, /FURNITURE_CHECK_RATE_LIMIT_REQUESTS = 30/);
   assert.match(previewSource, /detail: "low"/);
   assert.match(previewSource, /store: false/);
-  assert.match(visualiserSource, /Check photo & create preview/);
-  assert.match(visualiserSource, /Check your furniture selection/);
-  assert.match(visualiserSource, /Change furniture type/);
-  assert.match(visualiserSource, /Use \{furnitureMismatch\.selectedFurnitureType\} anyway/);
-  assert.match(readme, /mismatch or inconclusive result pauses the flow/);
+  assert.match(visualiserSource, /\/api\/furniture-check/);
+  assert.match(visualiserSource, /Check photo and continue/);
+  assert.match(visualiserSource, /This selection does not match your photo/);
+  assert.match(visualiserSource, /Your photo appears to show/);
+  assert.match(visualiserSource, /Choose \{furnitureSelectionAlert\.detectedFurnitureType\}/);
+  assert.match(visualiserSource, /Use \{furnitureSelectionAlert\.selectedFurnitureName\} anyway/);
+  assert.match(readme, /public GitHub Pages URL/);
+  assert.match(readme, /do not need a ChatGPT or OpenAI account/);
 });
 
 test("project summary is local, printable and truthfully labelled", async () => {

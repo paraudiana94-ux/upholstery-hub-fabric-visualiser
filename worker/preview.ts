@@ -10,6 +10,7 @@ const MAX_MULTIPART_BYTES = 12 * 1024 * 1024;
 const MAX_SWATCH_BYTES = 10 * 1024 * 1024;
 const FURNITURE_MISMATCH_CONFIDENCE = 0.72;
 const RATE_LIMIT_REQUESTS = 10;
+const FURNITURE_CHECK_RATE_LIMIT_REQUESTS = 30;
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000;
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 
@@ -37,7 +38,7 @@ interface OpenAITextResponse {
 }
 
 interface FurniturePhotoCheck {
-  status: "match" | "mismatch" | "uncertain";
+  status: "identified" | "match" | "mismatch" | "uncertain";
   detectedFurnitureType: string;
   confidence: number;
 }
@@ -54,6 +55,7 @@ class FurnitureCheckFailure extends Error {
 }
 
 const rateLimits = new Map<string, RateLimitEntry>();
+const furnitureCheckRateLimits = new Map<string, RateLimitEntry>();
 
 function getApiKey(env?: PreviewEnv): string {
   const runtime = globalThis as typeof globalThis & {
@@ -120,17 +122,21 @@ function clientKey(request: Request): string {
   return request.headers.get("cf-connecting-ip")?.trim() || forwarded || "unknown";
 }
 
-function checkRateLimit(request: Request): { allowed: boolean; retryAfter: number } {
+function checkRateLimit(
+  request: Request,
+  entries = rateLimits,
+  requestLimit = RATE_LIMIT_REQUESTS,
+): { allowed: boolean; retryAfter: number } {
   const now = Date.now();
   const key = clientKey(request);
-  const current = rateLimits.get(key);
+  const current = entries.get(key);
 
   if (!current || current.resetAt <= now) {
-    rateLimits.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    entries.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
     return { allowed: true, retryAfter: 0 };
   }
 
-  if (current.count >= RATE_LIMIT_REQUESTS) {
+  if (current.count >= requestLimit) {
     return {
       allowed: false,
       retryAfter: Math.max(1, Math.ceil((current.resetAt - now) / 1000)),
@@ -221,7 +227,7 @@ async function checkFurniturePhoto(
   request: Request,
   apiKey: string,
   photo: File,
-  selectedFurnitureType: string,
+  selectedFurnitureType: string | undefined,
   availableFurnitureTypes: string[],
 ): Promise<FurniturePhotoCheck> {
   const classificationValues = Array.from(
@@ -231,7 +237,9 @@ async function checkFurniturePhoto(
   const prompt = [
     "Classify the dominant furniture item in this customer photograph.",
     `Choose exactly one value from this live catalogue list: ${availableFurnitureTypes.join(", ")}; or choose Other or Unclear.`,
-    `The customer's current selection is ${selectedFurnitureType}. Classify from the photograph itself; do not copy or favour the selection.`,
+    selectedFurnitureType
+      ? `The customer's current selection is ${selectedFurnitureType}. Classify from the photograph itself; do not copy or favour the selection.`
+      : "No furniture type has been selected yet. Classify only from the photograph.",
     "Distinguish visually similar seating by its complete form and intended use. In particular, an upholstered lounge armchair is not a dining chair.",
     "Use Unclear when the furniture is obscured, several different items dominate, no furniture is visible, or the type cannot be determined reliably.",
   ].join(" ");
@@ -317,11 +325,13 @@ async function checkFurniturePhoto(
   const confidence = Math.max(0, Math.min(1, parsed.confidence));
   const detectedFurnitureType = parsed.detectedFurnitureType;
   const status =
-    detectedFurnitureType === selectedFurnitureType
-      ? "match"
-      : detectedFurnitureType === "Unclear" || confidence < FURNITURE_MISMATCH_CONFIDENCE
-        ? "uncertain"
-        : "mismatch";
+    detectedFurnitureType === "Unclear" || confidence < FURNITURE_MISMATCH_CONFIDENCE
+      ? "uncertain"
+      : !selectedFurnitureType
+        ? "identified"
+        : detectedFurnitureType === selectedFurnitureType
+          ? "match"
+          : "mismatch";
 
   return { status, detectedFurnitureType, confidence };
 }
@@ -355,7 +365,7 @@ function furnitureCheckErrorResponse(
     {
       code: error.status === 504 ? "FURNITURE_CHECK_TIMEOUT" : "FURNITURE_CHECK_UNAVAILABLE",
       message:
-        "We could not verify the furniture type in this photo. Please try again or continue without an AI preview.",
+        "We could not verify the furniture type in this photo. Please try again or continue without automatic checking.",
     },
     error.status === 504 ? 504 : 502,
   );
@@ -430,6 +440,124 @@ export function getPreviewOptions(request: Request): Response {
     );
   }
   return new Response(null, { status: 204, headers: corsHeaders(request) });
+}
+
+export async function identifyFurniture(
+  request: Request,
+  env?: PreviewEnv,
+): Promise<Response> {
+  const origin = request.headers.get("origin") ?? "";
+  if (origin && !isAllowedOrigin(origin)) {
+    return json(
+      request,
+      { code: "ORIGIN_NOT_ALLOWED", message: "This site is not allowed to use the furniture check." },
+      403,
+    );
+  }
+
+  const apiKey = getApiKey(env);
+  if (!apiKey) {
+    return json(
+      request,
+      { code: "AI_NOT_CONFIGURED", message: "The secure AI service is not configured on Render." },
+      503,
+    );
+  }
+
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (Number.isFinite(contentLength) && contentLength > MAX_MULTIPART_BYTES) {
+    return json(
+      request,
+      { code: "PHOTO_TOO_LARGE", message: "Choose a furniture photo smaller than 10 MB." },
+      413,
+    );
+  }
+
+  let formData: FormData;
+  try {
+    formData = await request.formData();
+  } catch {
+    return json(
+      request,
+      { code: "INVALID_REQUEST", message: "The furniture check request could not be read." },
+      400,
+    );
+  }
+
+  const photo = formData.get("photo");
+  if (!(photo instanceof File)) {
+    return json(
+      request,
+      { code: "INVALID_REQUEST", message: "A furniture photo is required." },
+      400,
+    );
+  }
+  if (!allowedImageTypes.has(photo.type)) {
+    return json(
+      request,
+      { code: "INVALID_PHOTO_TYPE", message: "Choose a JPEG, PNG or WebP furniture photo." },
+      415,
+    );
+  }
+  if (photo.size === 0 || photo.size > MAX_PHOTO_BYTES) {
+    return json(
+      request,
+      { code: "PHOTO_TOO_LARGE", message: "Choose a furniture photo smaller than 10 MB." },
+      413,
+    );
+  }
+
+  let catalogue;
+  try {
+    catalogue = await fetchPublishedCatalogue();
+  } catch {
+    return json(
+      request,
+      {
+        code: "LIVE_DATA_UNAVAILABLE",
+        message: "The live catalogue is unavailable, so the furniture photo cannot be checked.",
+      },
+      503,
+    );
+  }
+
+  const limit = checkRateLimit(
+    request,
+    furnitureCheckRateLimits,
+    FURNITURE_CHECK_RATE_LIMIT_REQUESTS,
+  );
+  if (!limit.allowed) {
+    return json(
+      request,
+      {
+        code: "FURNITURE_CHECK_RATE_LIMITED",
+        message: "This prototype allows 30 furniture checks per hour. Please try again later.",
+      },
+      429,
+      { "retry-after": String(limit.retryAfter) },
+    );
+  }
+
+  try {
+    const photoCheck = await checkFurniturePhoto(
+      request,
+      apiKey,
+      photo,
+      undefined,
+      catalogue.furniture.map((item) => item.name),
+    );
+    return json(request, {
+      status: photoCheck.status,
+      detectedFurnitureType: photoCheck.detectedFurnitureType,
+      confidence: photoCheck.confidence,
+      model: OPENAI_FURNITURE_CHECK_MODEL,
+    });
+  } catch (error) {
+    if (error instanceof FurnitureCheckFailure) {
+      return furnitureCheckErrorResponse(request, error);
+    }
+    return furnitureCheckErrorResponse(request, new FurnitureCheckFailure(502));
+  }
 }
 
 export async function createPreview(request: Request, env?: PreviewEnv): Promise<Response> {
