@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { parseCatalogueCsv } from "../lib/catalogue.ts";
 import { calculateIndicativeEstimate } from "../lib/pricing.ts";
 
 const templateRoot = new URL("../", import.meta.url);
@@ -483,7 +484,7 @@ test("preview route blocks unapproved origins before reading data", async () => 
   assert.equal(response.headers.get("access-control-allow-origin"), null);
 });
 
-test("testing quota and logo reset stay aligned across server and client", async () => {
+test("testing quota and approved Home and Start Again behaviour stay aligned", async () => {
   const [previewSource, visualiserSource, readme] = await Promise.all([
     readFile(new URL("../worker/preview.ts", import.meta.url), "utf8"),
     readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
@@ -493,9 +494,13 @@ test("testing quota and logo reset stay aligned across server and client", async
   assert.match(previewSource, /RATE_LIMIT_REQUESTS = 10/);
   assert.match(previewSource, /allows 10 AI previews per hour/);
   assert.match(visualiserSource, /limits each visitor to 10 previews per hour/);
-  assert.match(visualiserSource, /function resetJourneyFromLogo\(\)/);
+  assert.match(visualiserSource, /function goHome\(\)/);
+  assert.match(visualiserSource, /function requestJourneyReset\(trigger: HTMLElement\)/);
   assert.match(visualiserSource, /key\.startsWith\("uh-"\)/);
-  assert.match(visualiserSource, /window\.location\.reload\(\)/);
+  assert.match(visualiserSource, /Continue your selection/);
+  assert.match(visualiserSource, /Start again\?/);
+  assert.match(visualiserSource, /Keep my progress/);
+  assert.doesNotMatch(visualiserSource, /window\.location\.reload\(\)/);
   assert.match(readme, /allows 10 preview attempts per source IP per hour/);
 });
 
@@ -513,10 +518,14 @@ test("furniture photo checking is consent-gated and offers a mismatch correction
   assert.match(previewSource, /store: false/);
   assert.match(visualiserSource, /\/api\/furniture-check/);
   assert.match(visualiserSource, /Check photo and continue/);
-  assert.match(visualiserSource, /This selection does not match your photo/);
-  assert.match(visualiserSource, /Your photo appears to show/);
-  assert.match(visualiserSource, /Choose \{furnitureSelectionAlert\.detectedFurnitureType\}/);
-  assert.match(visualiserSource, /Use \{furnitureSelectionAlert\.selectedFurnitureName\} anyway/);
+  assert.match(visualiserSource, /Check the furniture type/);
+  assert.match(visualiserSource, /The photo may show/);
+  assert.match(visualiserSource, /Use \{furnitureSelectionAlert\.detectedFurnitureType\}/);
+  assert.match(visualiserSource, /Keep \{furnitureSelectionAlert\.selectedFurnitureName\} anyway/);
+  assert.match(visualiserSource, /selection differs from the AI prediction/);
+  assert.match(visualiserSource, /AI prediction from your photo/);
+  assert.match(visualiserSource, /This is a prediction and may be wrong/);
+  assert.doesNotMatch(visualiserSource, /verified furniture type/i);
   assert.match(readme, /public GitHub Pages URL/);
   assert.match(readme, /do not need a ChatGPT or OpenAI account/);
 });
@@ -529,6 +538,12 @@ test("project summary is local, printable and truthfully labelled", async () => 
   ]);
 
   assert.match(visualiserSource, /View &amp; save project summary/);
+  assert.match(visualiserSource, /Review and save your project summary/);
+  assert.match(visualiserSource, /This project summary is not a quotation/);
+  assert.match(visualiserSource, /Indicative estimate<\/dt>/);
+  assert.match(visualiserSource, /Catalogue checked<\/dt>/);
+  assert.match(visualiserSource, /Estimate exclusions/);
+  assert.match(visualiserSource, /Edit selections/);
   assert.match(visualiserSource, /Print or save as PDF/);
   assert.match(visualiserSource, /window\.print\(\)/);
   assert.match(visualiserSource, /maxLength=\{600\}/);
@@ -537,6 +552,46 @@ test("project summary is local, printable and truthfully labelled", async () => 
   assert.match(css, /size: A4 portrait/);
   assert.match(css, /\.summary-controls[\s\S]*display: none !important/);
   assert.match(readme, /native print dialog to print or save a polished PDF summary/);
+});
+
+test("customer-facing live-data and AI states use safe approved wording", async () => {
+  const [visualiserSource, notFoundPage] = await Promise.all([
+    readFile(new URL("../app/Visualiser.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../public/404.html", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(visualiserSource, /Loading the latest fabrics and prices/);
+  assert.match(visualiserSource, /No estimate has been created/);
+  assert.match(visualiserSource, /This item is no longer available\. Choose another option before continuing/);
+  assert.match(visualiserSource, /Image unavailable\. Colour shown is approximate/);
+  assert.match(visualiserSource, /Checking your photo… This can take up to 45 seconds/);
+  assert.match(visualiserSource, /We couldn't analyse this photo/);
+  assert.match(visualiserSource, /Creating an indicative AI preview\. This can take up to two minutes/);
+  assert.match(visualiserSource, /We couldn't create a preview/);
+  assert.match(visualiserSource, /Prototype demonstration\. No account required/);
+  assert.doesNotMatch(visualiserSource, /Continue to professional advice/);
+  assert.doesNotMatch(visualiserSource, /Quote route: Awaiting verification/);
+  assert.match(notFoundPage, /Return to the visualiser/);
+});
+
+test("missing or non-Cloudinary swatches are not substituted with local assets", () => {
+  const fabrics = [
+    '"Fabric ID","Fabric Name","Collection","Main Colour","Colour Hex","Pattern","Material","Price per Metre (€)","Suitable Furniture Types","Stock Status","Active","Demo Data","Last Updated","Swatch Image URL"',
+    '"F001","Test Linen","Demo","Sand","#D7C4A3","Plain","Blend","28","Armchair","In Stock","TRUE","TRUE","2026-08-06","https://example.org/not-cloudinary.jpg"',
+  ].join("\n");
+  const furniture = [
+    '"Furniture Type ID","Furniture Type","Min Estimated Metres","Max Estimated Metres","Starting Labour Cost (€)","Min Turnaround Weeks","Max Turnaround Weeks","Special Considerations","Active","Demo Data","Last Updated"',
+    '"FT002","Armchair","5","7","550","4","6","Inspection required","TRUE","TRUE","2026-08-06"',
+  ].join("\n");
+
+  const catalogue = parseCatalogueCsv(fabrics, furniture);
+  assert.equal(catalogue.fabrics[0].swatchImageUrl, "");
+
+  const missingStock = fabrics.replace('"In Stock"', '""');
+  assert.throws(
+    () => parseCatalogueCsv(missingStock, furniture),
+    /missing Stock Status value/,
+  );
 });
 
 test("deterministic Armchair pricing matches the approved reversible test", () => {

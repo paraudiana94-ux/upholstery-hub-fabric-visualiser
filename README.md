@@ -16,8 +16,9 @@ The customer-facing deployment is the public GitHub Pages URL. It does not use C
 - No catalogue or pricing rows are embedded in the application.
 - The two supplied published exports are publicly readable demonstration data and permit browser access from GitHub Pages.
 - The importer locates the actual field-heading row beneath the Sheet's descriptive rows, validates the contract and exposes a truthful error without fallback rows if either source is malformed or unavailable.
-- After the customer consents in Step 1, the photo is sent to a server-only Render route and classified once with `gpt-5.6-luna`. In Step 2, every furniture choice is immediately compared with that result. A mismatch is rejected with a visible correction, while an inconclusive result requires explicit confirmation. The later optional preview uses the selected live Cloudinary swatch and `gpt-image-2`.
+- After the customer consents in Step 1, the photo is sent to a server-only Render route and classified once with `gpt-5.6-luna`. In Step 2, every furniture choice is immediately compared with that prediction. A mismatch pauses progress and offers the predicted type, a photo change, or a clearly acknowledged manual override. An inconclusive result remains explicitly uncertain. The later optional preview uses the selected live Cloudinary swatch and `gpt-image-2`.
 - The final action is truthfully labelled **View & save project summary**. Customers can add optional browser-local consultation notes and use the native print dialog to print or save a polished PDF summary.
+- The logo and **Home** preserve in-progress choices. Only **Start again** clears browser-local progress, after a confirmation dialog whose safe action receives initial focus.
 - Email and quote submission remain visibly unconnected because no verified quotation route has been supplied.
 
 ## Run locally
@@ -39,7 +40,7 @@ npm run lint
 npm run build:pages
 ```
 
-The tests cover server rendering, both published live-tab requests, descriptive-row handling, inactive-row filtering, Cloudinary URL preservation, visible failure without substituted rows, the approved Armchair pricing examples, CORS protection, secret non-disclosure and the live-ID-to-image-edit contract.
+The tests cover server rendering, both published live-tab requests, descriptive-row handling, inactive-row filtering, Cloudinary-only swatch handling, visible failure without substituted rows, unavailable-item guards, approved Home/reset behaviour, truthful summary wording, AI uncertainty and mismatch states, the approved Armchair pricing examples, CORS protection, secret non-disclosure and the live-ID-to-image-edit contract.
 
 ## Live data contract
 

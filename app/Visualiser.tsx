@@ -55,6 +55,7 @@ interface FurniturePhotoClassification {
 
 interface FurnitureCheckPayload extends PreviewErrorPayload {
   status?: "identified" | "uncertain";
+  detectedFurnitureType?: string;
   confidence?: number;
   model?: string;
 }
@@ -65,6 +66,11 @@ interface FurnitureSelectionAlert {
   selectedFurnitureName: string;
   message: string;
   detectedFurnitureType?: string;
+}
+
+interface FurnitureSelectionOverride {
+  aiPrediction: string;
+  customerSelection: string;
 }
 
 type FurnitureCheckStatus = "idle" | "checking" | "ready" | "error";
@@ -115,6 +121,14 @@ function safeHex(value: string) {
   return /^#[0-9a-f]{6}$/i.test(value) ? value : "#D8D2C8";
 }
 
+function isAvailableStockStatus(value: string) {
+  const normalised = value.trim().toLowerCase();
+  return Boolean(normalised) &&
+    !normalised.includes("out of stock") &&
+    !normalised.includes("unavailable") &&
+    !normalised.includes("discontinued");
+}
+
 function lastUpdatedLabel(value: string) {
   if (!value) {
     return "date unavailable";
@@ -125,9 +139,13 @@ function lastUpdatedLabel(value: string) {
   }
   return new Intl.DateTimeFormat("en-IE", {
     day: "numeric",
-    month: "short",
+    month: "long",
     year: "numeric",
   }).format(date);
+}
+
+function withArticle(value: string) {
+  return `${/^[aeiou]/i.test(value) ? "an" : "a"} ${value}`;
 }
 
 export function Visualiser() {
@@ -136,20 +154,12 @@ export function Visualiser() {
   const [liveStatus, setLiveStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
-  const [catalogueError, setCatalogueError] = useState("");
   const [localPhoto, setLocalPhoto] = useState<LocalPhoto | null>(null);
   const [photoError, setPhotoError] = useState("");
   const [photoInputKey, setPhotoInputKey] = useState(0);
-  const [selectedFurnitureId, setSelectedFurnitureId] = useState(() =>
-    getStoredValue("uh-furniture-id"),
-  );
-  const [selectedFabricId, setSelectedFabricId] = useState(() =>
-    getStoredValue("uh-fabric-id"),
-  );
-  const [quantity, setQuantity] = useState(() => {
-    const stored = Number(getStoredValue("uh-quantity", "1"));
-    return Number.isInteger(stored) && stored >= 1 && stored <= 10 ? stored : 1;
-  });
+  const [selectedFurnitureId, setSelectedFurnitureId] = useState("");
+  const [selectedFabricId, setSelectedFabricId] = useState("");
+  const [quantity, setQuantity] = useState(1);
   const [colourFilter, setColourFilter] = useState("");
   const [patternFilter, setPatternFilter] = useState("");
   const [stockFilter, setStockFilter] = useState("");
@@ -163,19 +173,28 @@ export function Visualiser() {
     useState<FurniturePhotoClassification | null>(null);
   const [furnitureSelectionAlert, setFurnitureSelectionAlert] =
     useState<FurnitureSelectionAlert | null>(null);
+  const [furnitureSelectionOverride, setFurnitureSelectionOverride] =
+    useState<FurnitureSelectionOverride | null>(null);
+  const [overrideAcknowledged, setOverrideAcknowledged] = useState(false);
+  const [showOverrideConfirmation, setShowOverrideConfirmation] = useState(false);
   const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("idle");
   const [generatedPreview, setGeneratedPreview] =
     useState<GeneratedPreview | null>(null);
   const [previewError, setPreviewError] = useState("");
   const [customerNotes, setCustomerNotes] = useState("");
   const [reconciliationNotice, setReconciliationNotice] = useState("");
+  const [resumeStep, setResumeStep] = useState<Step | null>(null);
+  const [resetDialogOpen, setResetDialogOpen] = useState(false);
+  const [storageReady, setStorageReady] = useState(false);
 
   const mainHeadingRef = useRef<HTMLHeadingElement>(null);
   const errorSummaryRef = useRef<HTMLDivElement>(null);
+  const resetDialogRef = useRef<HTMLDialogElement>(null);
+  const resetSafeButtonRef = useRef<HTMLButtonElement>(null);
+  const resetReturnFocusRef = useRef<HTMLElement | null>(null);
 
   const loadCatalogue = useCallback(async () => {
     setLiveStatus("loading");
-    setCatalogueError("");
     try {
       if (
         typeof window !== "undefined" &&
@@ -201,14 +220,9 @@ export function Visualiser() {
       }
       setCatalogue(payload);
       setLiveStatus("ready");
-    } catch (error) {
+    } catch {
       setCatalogue(null);
       setLiveStatus("error");
-      setCatalogueError(
-        error instanceof Error
-          ? error.message
-          : "The live catalogue could not be read.",
-      );
     }
   }, []);
 
@@ -228,10 +242,40 @@ export function Visualiser() {
   }, [loadCatalogue]);
 
   useEffect(() => {
+    const storedFurnitureId = getStoredValue("uh-furniture-id");
+    const storedFabricId = getStoredValue("uh-fabric-id");
+    const storedQuantity = Number(getStoredValue("uh-quantity", "1"));
+    const restoreStoredSelection = window.setTimeout(() => {
+      setSelectedFurnitureId(storedFurnitureId);
+      setSelectedFabricId(storedFabricId);
+      setQuantity(
+        Number.isInteger(storedQuantity) && storedQuantity >= 1 && storedQuantity <= 10
+          ? storedQuantity
+          : 1,
+      );
+      setStorageReady(true);
+    }, 0);
+    return () => window.clearTimeout(restoreStoredSelection);
+  }, []);
+
+  useEffect(() => {
     if (step !== "start") {
       mainHeadingRef.current?.focus();
     }
   }, [step]);
+
+  useEffect(() => {
+    const dialog = resetDialogRef.current;
+    if (!dialog) {
+      return;
+    }
+    if (resetDialogOpen && !dialog.open) {
+      dialog.showModal();
+      resetSafeButtonRef.current?.focus();
+    } else if (!resetDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [resetDialogOpen]);
 
   useEffect(() => {
     if (selectedFurnitureId) {
@@ -263,21 +307,33 @@ export function Visualiser() {
     }
     const reconciliation = window.setTimeout(() => {
       const notices: string[] = [];
+      let invalidStep: Step | null = null;
       if (
         selectedFurnitureId &&
         !catalogue.furniture.some((item) => item.id === selectedFurnitureId)
       ) {
         setSelectedFurnitureId("");
-        notices.push("Your previous furniture choice is no longer active.");
+        setFurnitureSelectionOverride(null);
+        clearGeneratedPreview();
+        notices.push("This item is no longer available. Choose another option before continuing.");
+        invalidStep = "furniture";
       }
       if (
         selectedFabricId &&
-        !catalogue.fabrics.some((item) => item.id === selectedFabricId)
+        !catalogue.fabrics.some(
+          (item) =>
+            item.id === selectedFabricId && isAvailableStockStatus(item.stockStatus),
+        )
       ) {
         setSelectedFabricId("");
-        notices.push("Your previous fabric choice is no longer active.");
+        clearGeneratedPreview();
+        notices.push("This item is no longer available. Choose another option before continuing.");
+        invalidStep ??= "fabrics";
       }
-      setReconciliationNotice(notices.join(" "));
+      if (notices.length > 0) {
+        setReconciliationNotice(notices.join(" "));
+        go(invalidStep ?? "furniture");
+      }
     }, 0);
     return () => window.clearTimeout(reconciliation);
   }, [catalogue, selectedFabricId, selectedFurnitureId]);
@@ -295,7 +351,8 @@ export function Visualiser() {
     (item) => item.id === selectedFurnitureId,
   );
   const selectedFabric = catalogue?.fabrics.find(
-    (item) => item.id === selectedFabricId,
+    (item) =>
+      item.id === selectedFabricId && isAvailableStockStatus(item.stockStatus),
   );
 
   const estimate = useMemo(() => {
@@ -366,6 +423,9 @@ export function Visualiser() {
     setFurnitureCheckError("");
     setFurniturePhotoClassification(null);
     setFurnitureSelectionAlert(null);
+    setFurnitureSelectionOverride(null);
+    setOverrideAcknowledged(false);
+    setShowOverrideConfirmation(false);
     setAiAcknowledged(false);
   }
 
@@ -475,15 +535,11 @@ export function Visualiser() {
         model: payload.model,
       });
       setFurnitureCheckStatus("ready");
-    } catch (error) {
+    } catch {
       setFurniturePhotoClassification(null);
       setFurnitureCheckStatus("error");
       setFurnitureCheckError(
-        error instanceof DOMException && error.name === "AbortError"
-          ? "The automatic furniture check took too long. You can still choose a type, or return to the photo and try again."
-          : error instanceof Error
-            ? error.message
-            : "We could not check this photo automatically. You can still choose a furniture type.",
+        "We couldn't analyse this photo. Try another photo or choose the furniture type yourself.",
       );
     } finally {
       window.clearTimeout(timeout);
@@ -491,9 +547,20 @@ export function Visualiser() {
     go("furniture");
   }
 
-  function acceptFurnitureSelection(item: FurnitureType) {
+  function acceptFurnitureSelection(item: FurnitureType, isOverride = false) {
     setSelectedFurnitureId(item.id);
+    setFurnitureSelectionOverride(
+      isOverride && furniturePhotoClassification
+        ? {
+            aiPrediction: furniturePhotoClassification.detectedFurnitureType,
+            customerSelection: item.name,
+          }
+        : null,
+    );
     setFurnitureSelectionAlert(null);
+    setOverrideAcknowledged(false);
+    setShowOverrideConfirmation(false);
+    setReconciliationNotice("");
     clearGeneratedPreview();
     setFormError("");
   }
@@ -505,6 +572,9 @@ export function Visualiser() {
     }
 
     setSelectedFurnitureId("");
+    setFurnitureSelectionOverride(null);
+    setOverrideAcknowledged(false);
+    setShowOverrideConfirmation(false);
     clearGeneratedPreview();
     setFormError("");
     if (furniturePhotoClassification.status === "uncertain") {
@@ -513,7 +583,7 @@ export function Visualiser() {
         selectedFurnitureId: item.id,
         selectedFurnitureName: item.name,
         message:
-          "We could not confidently identify the item in your photo, so this furniture selection cannot be verified automatically.",
+          "We could not confidently identify the furniture in this photo.",
       });
       return;
     }
@@ -524,7 +594,7 @@ export function Visualiser() {
         selectedFurnitureId: item.id,
         selectedFurnitureName: item.name,
         detectedFurnitureType: furniturePhotoClassification.detectedFurnitureType,
-        message: `Your photo appears to show “${furniturePhotoClassification.detectedFurnitureType}”, not “${item.name}”. Choose the matching furniture type for an accurate estimate.`,
+        message: `The photo may show ${withArticle(furniturePhotoClassification.detectedFurnitureType)}, but you selected ${withArticle(item.name)}. Choose the option that best describes your furniture before continuing.`,
       });
       return;
     }
@@ -536,8 +606,10 @@ export function Visualiser() {
     const item = catalogue?.furniture.find(
       (candidate) => candidate.id === furnitureSelectionAlert?.selectedFurnitureId,
     );
-    if (item) {
+    if (item && furnitureSelectionAlert?.kind === "uncertain") {
       acceptFurnitureSelection(item);
+    } else if (item && overrideAcknowledged) {
+      acceptFurnitureSelection(item, true);
     }
   }
 
@@ -587,24 +659,16 @@ export function Visualiser() {
         | PreviewErrorPayload
         | null;
       if (!response.ok || !payload || !("imageDataUrl" in payload)) {
-        throw new Error(
-          payload && "message" in payload && payload.message
-            ? payload.message
-            : "The AI preview could not be created. Your estimate is still available.",
-        );
+        throw new Error("preview-failed");
       }
 
       setGeneratedPreview(payload);
       setPreviewStatus("ready");
       go("result");
-    } catch (error) {
+    } catch {
       setPreviewStatus("error");
       setPreviewError(
-        error instanceof DOMException && error.name === "AbortError"
-          ? "The AI preview took too long. Please try again; your selections remain available."
-          : error instanceof Error
-            ? error.message
-            : "The AI preview could not be created. Your estimate is still available.",
+        "We couldn't create a preview. Your selections and indicative estimate are still available.",
       );
     } finally {
       window.clearTimeout(timeout);
@@ -643,20 +707,49 @@ export function Visualiser() {
     setFormError("");
     setCustomerNotes("");
     setReconciliationNotice("");
+    setResumeStep(null);
     Object.keys(window.sessionStorage)
       .filter((key) => key.startsWith("uh-"))
       .forEach((key) => window.sessionStorage.removeItem(key));
   }
 
-  function resetJourney() {
-    clearJourneyState();
+  function hasJourneyProgress() {
+    return Boolean(
+      localPhoto ||
+        selectedFurnitureId ||
+        selectedFabricId ||
+        quantity !== 1 ||
+        generatedPreview ||
+        customerNotes.trim(),
+    );
+  }
+
+  function goHome() {
+    if (step !== "start" && hasJourneyProgress()) {
+      setResumeStep(step);
+    }
     go("start");
   }
 
-  function resetJourneyFromLogo() {
+  function requestJourneyReset(trigger: HTMLElement) {
+    if (!hasJourneyProgress()) {
+      clearJourneyState();
+      go("start");
+      return;
+    }
+    resetReturnFocusRef.current = trigger;
+    setResetDialogOpen(true);
+  }
+
+  function cancelJourneyReset() {
+    setResetDialogOpen(false);
+    window.requestAnimationFrame(() => resetReturnFocusRef.current?.focus());
+  }
+
+  function confirmJourneyReset() {
+    setResetDialogOpen(false);
     clearJourneyState();
-    window.location.hash = "#/start";
-    window.location.reload();
+    go("start");
   }
 
   function printProjectSummary() {
@@ -687,8 +780,8 @@ export function Visualiser() {
         <div className="state-panel" role="status" aria-live="polite">
           <span className="status-dot status-dot-loading" aria-hidden="true" />
           <div>
-            <strong>Loading the live catalogue</strong>
-            <p>Reading current fabric and pricing rows from Google Sheets.</p>
+            <strong>Loading the latest fabrics and prices…</strong>
+            <p>Please wait while the current collection is checked.</p>
           </div>
         </div>
       );
@@ -698,15 +791,14 @@ export function Visualiser() {
         <div className="state-panel state-panel-error" role="alert">
           <span className="status-dot status-dot-error" aria-hidden="true" />
           <div>
-            <strong>The live catalogue is unavailable</strong>
-            <p>{catalogueError}</p>
-            <p>No stored prices or catalogue rows have been substituted.</p>
+            <strong>We can&apos;t load the latest fabrics and prices right now.</strong>
+            <p>No estimate has been created.</p>
             <div className="inline-actions">
               <button className="button button-dark" type="button" onClick={loadCatalogue}>
-                Retry live data
+                Try again
               </button>
-              <button className="button button-quiet" type="button" onClick={() => go("quote")}>
-                Continue to professional advice
+              <button className="button button-quiet" type="button" onClick={goHome}>
+                Return home
               </button>
             </div>
           </div>
@@ -717,7 +809,7 @@ export function Visualiser() {
       <div className="live-strip" role="status">
         <span className="status-dot status-dot-ready" aria-hidden="true" />
         <span>
-          Live Google Sheets data fetched {catalogue ? lastUpdatedLabel(catalogue.fetchedAt) : "now"}
+          Catalogue updated {catalogue ? lastUpdatedLabel(catalogue.fetchedAt) : "today"}
         </span>
         <button className="text-button" type="button" onClick={loadCatalogue}>
           Refresh
@@ -766,7 +858,50 @@ export function Visualiser() {
     );
   }
 
+  function FurniturePredictionPanel() {
+    if (!localPhoto || !furniturePhotoClassification || !selectedFurniture) {
+      return null;
+    }
+
+    const isUncertain = furniturePhotoClassification.status === "uncertain";
+    const isMatch =
+      !isUncertain &&
+      furniturePhotoClassification.detectedFurnitureType === selectedFurniture.name;
+
+    return (
+      <section className="furniture-comparison" aria-label="Photo prediction and furniture selection">
+        <div>
+          <span>AI prediction from your photo</span>
+          <strong>
+            {isUncertain
+              ? "Furniture type unclear"
+              : furniturePhotoClassification.detectedFurnitureType}
+          </strong>
+          <small>
+            {isUncertain
+              ? "We could not confidently identify the furniture in this photo."
+              : "This is a prediction and may be wrong."}
+          </small>
+        </div>
+        <div>
+          <span>Your furniture selection</span>
+          <strong>{selectedFurniture.name}</strong>
+          <small>This selection will be used for the estimate.</small>
+        </div>
+        <p className={furnitureSelectionOverride ? "comparison-warning" : "comparison-status"}>
+          {isUncertain
+            ? "You chose the furniture type manually."
+            : isMatch
+              ? "These appear to match."
+              : "These do not match. You chose to continue with your furniture selection."}
+        </p>
+      </section>
+    );
+  }
+
   function renderStart() {
+    const journeyInProgress = hasJourneyProgress();
+    const continuation = resumeStep ?? (selectedFabricId ? "review" : selectedFurnitureId ? "fabrics" : "photo");
     return (
       <section className="hero-grid" aria-labelledby="start-heading">
         <div className="hero-copy">
@@ -777,9 +912,20 @@ export function Visualiser() {
             conversation with Upholstery Hub.
           </p>
           <div className="hero-actions">
-            <button className="button button-dark button-large" type="button" onClick={() => go("photo")}>
-              Start visualising
-            </button>
+            {journeyInProgress ? (
+              <>
+                <button className="button button-dark button-large" type="button" onClick={() => go(continuation)}>
+                  Continue your selection
+                </button>
+                <button className="button button-light button-large" type="button" onClick={(event) => requestJourneyReset(event.currentTarget)}>
+                  Start again
+                </button>
+              </>
+            ) : (
+              <button className="button button-dark button-large" type="button" onClick={() => go("photo")}>
+                Start visualising
+              </button>
+            )}
           </div>
           <p className="trust-line">
             <span aria-hidden="true">✓</span> No account required. A photograph stays local until you consent and continue to automatic furniture checking.
@@ -797,7 +943,7 @@ export function Visualiser() {
             </li>
             <li>
               <span>02</span>
-              <div><strong>Choose a live fabric</strong><small>Browse the current Google Sheets catalogue.</small></div>
+              <div><strong>Choose a live fabric</strong><small>Browse the current fabric collection.</small></div>
             </li>
             <li>
               <span>03</span>
@@ -824,8 +970,8 @@ export function Visualiser() {
             Use one clear photo with the whole item visible. Avoid people and unrelated personal details.
           </p>
           <div className="privacy-note">
-            <strong>Selecting a photo does not send it anywhere.</strong>
-            <p>The file stays in this browser session until you explicitly consent and continue. It is then sent securely through Render to OpenAI so Step 2 can check your furniture selection. You can remove it at any time.</p>
+            <strong>Selecting a photo does not upload it.</strong>
+            <p>It stays in this browser until you consent and continue. You can remove it at any time.</p>
           </div>
         </div>
         <div className="step-card">
@@ -871,13 +1017,18 @@ export function Visualiser() {
                     setFurnitureCheckError("");
                     setFurniturePhotoClassification(null);
                     setFurnitureSelectionAlert(null);
+                    setFurnitureSelectionOverride(null);
+                    setSelectedFurnitureId("");
                   }
                 }}
               />
               <span>
-                I have permission to use this photo and agree to send it to Upholstery Hub’s Render service and OpenAI when I continue, to identify the furniture type and, if I later request it, generate an indicative fabric preview. OpenAI may retain API abuse-monitoring content for up to 30 days.
+                I have permission to use this photo. When I continue, it will be sent to Upholstery Hub&apos;s AI service and OpenAI to suggest the furniture type. If I later create a preview, the photo and selected fabric will be processed again.
               </span>
             </label>
+          ) : null}
+          {localPhoto ? (
+            <p className="field-help retention-note">OpenAI may retain API abuse-monitoring content for up to 30 days.</p>
           ) : null}
           <div className="card-actions">
             <button
@@ -899,6 +1050,12 @@ export function Visualiser() {
           {localPhoto && !aiAcknowledged ? (
             <p className="field-help consent-help">Confirm permission above to enable the Step 2 furniture check.</p>
           ) : null}
+          {furnitureCheckStatus === "checking" ? (
+            <div className="preview-status" role="status" aria-live="polite">
+              <span className="status-dot status-dot-loading" aria-hidden="true" />
+              <span>Checking your photo… This can take up to 45 seconds.</span>
+            </div>
+          ) : null}
         </div>
       </section>
     );
@@ -918,12 +1075,12 @@ export function Visualiser() {
         <LiveDataPanel />
         {reconciliationNotice ? <p className="notice" role="status">{reconciliationNotice}</p> : null}
         <ErrorSummary />
-        {localPhoto && furnitureCheckStatus === "ready" ? (
+        {localPhoto && furnitureCheckStatus === "ready" && !selectedFurniture ? (
           <div className="state-panel photo-check-ready" role="status">
             <span className="status-dot status-dot-ready" aria-hidden="true" />
             <div>
-              <strong>Photo check ready</strong>
-              <p>Your choice will be compared with the furniture identified in the uploaded photograph.</p>
+              <strong>AI prediction ready</strong>
+              <p>Choose the furniture type that best describes your item. The prediction may be wrong.</p>
             </div>
           </div>
         ) : null}
@@ -931,7 +1088,7 @@ export function Visualiser() {
           <div className="state-panel state-panel-warning" role="alert">
             <span className="status-dot status-dot-warning" aria-hidden="true" />
             <div>
-              <strong>Automatic furniture checking is unavailable</strong>
+              <strong>Photo analysis unavailable</strong>
               <p>{furnitureCheckError}</p>
               <button className="button button-light" type="button" onClick={() => go("photo")}>
                 Return to photo and retry
@@ -948,7 +1105,7 @@ export function Visualiser() {
             <div>
               <strong>
                 {furnitureSelectionAlert.kind === "mismatch"
-                  ? "This selection does not match your photo"
+                  ? "Check the furniture type"
                   : "Please confirm this furniture selection"}
               </strong>
               <p>{furnitureSelectionAlert.message}</p>
@@ -958,16 +1115,38 @@ export function Visualiser() {
                   (item) => item.name === furnitureSelectionAlert.detectedFurnitureType,
                 ) ? (
                   <button className="button button-dark" type="button" onClick={acceptDetectedFurniture}>
-                    Choose {furnitureSelectionAlert.detectedFurnitureType}
+                    Use {furnitureSelectionAlert.detectedFurnitureType}
                   </button>
                 ) : null}
-                <button className="button button-light" type="button" onClick={acceptFurnitureOverride}>
-                  Use {furnitureSelectionAlert.selectedFurnitureName} anyway
-                </button>
-                <button className="button button-quiet" type="button" onClick={() => go("photo")}>
+                {furnitureSelectionAlert.kind === "uncertain" ? (
+                  <button className="button button-dark" type="button" onClick={acceptFurnitureOverride}>
+                    Use {furnitureSelectionAlert.selectedFurnitureName}
+                  </button>
+                ) : null}
+                <button className="button button-light" type="button" onClick={() => go("photo")}>
                   Change photo
                 </button>
+                {furnitureSelectionAlert.kind === "mismatch" ? (
+                  <button className="button button-quiet" type="button" onClick={() => setShowOverrideConfirmation(true)}>
+                    Keep {furnitureSelectionAlert.selectedFurnitureName} anyway
+                  </button>
+                ) : null}
               </div>
+              {showOverrideConfirmation && furnitureSelectionAlert.kind === "mismatch" ? (
+                <div className="override-confirmation">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={overrideAcknowledged}
+                      onChange={(event) => setOverrideAcknowledged(event.target.checked)}
+                    />
+                    <span>I understand that the estimate may be inaccurate because my selection differs from the AI prediction.</span>
+                  </label>
+                  <button className="button button-dark" type="button" disabled={!overrideAcknowledged} onClick={acceptFurnitureOverride}>
+                    Continue with {furnitureSelectionAlert.selectedFurnitureName}
+                  </button>
+                </div>
+              ) : null}
             </div>
           </div>
         ) : null}
@@ -993,6 +1172,7 @@ export function Visualiser() {
                 </label>
               ))}
             </fieldset>
+            <FurniturePredictionPanel />
             <p id="furniture-photo-check-help" className="field-help furniture-check-help">
               {localPhoto
                 ? "Selections are checked against your consented photograph before pricing assumptions are applied."
@@ -1036,6 +1216,7 @@ export function Visualiser() {
           <SelectionSummary />
         </div>
         <LiveDataPanel />
+        {reconciliationNotice ? <p className="notice" role="status">{reconciliationNotice}</p> : null}
         <ErrorSummary />
         {catalogue ? (
           <>
@@ -1069,16 +1250,19 @@ export function Visualiser() {
               <fieldset className="choice-grid fabric-grid">
                 <legend>Live fabric options</legend>
                 {filteredFabrics.map((fabric) => {
-                  const imageFailed = failedSwatches.has(fabric.id);
+                  const imageFailed = failedSwatches.has(fabric.id) || !fabric.swatchImageUrl;
+                  const unavailable = !isAvailableStockStatus(fabric.stockStatus);
                   return (
-                    <label className={`fabric-card ${selectedFabricId === fabric.id ? "fabric-card-selected" : ""}`} key={fabric.id}>
+                    <label className={`fabric-card ${selectedFabricId === fabric.id ? "fabric-card-selected" : ""} ${unavailable ? "fabric-card-unavailable" : ""}`} key={fabric.id}>
                       <input
                         type="radio"
                         name="fabric"
                         value={fabric.id}
+                        disabled={unavailable}
                         checked={selectedFabricId === fabric.id}
                         onChange={() => {
                           setSelectedFabricId(fabric.id);
+                          setReconciliationNotice("");
                           clearGeneratedPreview();
                           setFormError("");
                         }}
@@ -1092,7 +1276,7 @@ export function Visualiser() {
                             role="img"
                             aria-label={`Image unavailable for ${fabric.name}. Approximate colour ${fabric.mainColour}.`}
                           >
-                            <span>Image unavailable</span>
+                            <span>Image unavailable. Colour shown is approximate.</span>
                           </div>
                         ) : (
                           <img
@@ -1115,6 +1299,7 @@ export function Visualiser() {
                           <span className={`stock-badge stock-${fabric.stockStatus.toLowerCase().replaceAll(" ", "-")}`}>{fabric.stockStatus}</span>
                           <span>Suitability to confirm</span>
                         </div>
+                        {unavailable ? <small className="unavailable-copy">This item is no longer available. Choose another option before continuing.</small> : null}
                       </div>
                     </label>
                   );
@@ -1123,8 +1308,8 @@ export function Visualiser() {
             ) : (
               <div className="state-panel">
                 <div>
-                  <strong>No fabrics match these filters</strong>
-                  <p>Clear one or more filters to see the active catalogue.</p>
+                  <strong>No fabrics match your current filters.</strong>
+                  <p>Clear the filters to see the current collection.</p>
                   <button className="button button-light" type="button" onClick={() => {
                     setColourFilter("");
                     setPatternFilter("");
@@ -1144,6 +1329,15 @@ export function Visualiser() {
   }
 
   function renderReview() {
+    if (!storageReady || liveStatus === "loading" || liveStatus === "error") {
+      return (
+        <section className="narrow-section" aria-labelledby="review-heading">
+          <h1 id="review-heading" tabIndex={-1} ref={mainHeadingRef}>Review your choices</h1>
+          <LiveDataPanel />
+        </section>
+      );
+    }
+
     if (!selectedFurniture || !selectedFabric) {
       return (
         <section className="narrow-section" aria-labelledby="review-heading">
@@ -1177,15 +1371,27 @@ export function Visualiser() {
               <div className="no-photo-placeholder"><span aria-hidden="true">○</span><strong>No photograph selected</strong><p>The price path remains available.</p></div>
             )}
             <div className="review-swatch">
-              <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name} live fabric swatch`} onError={() => markSwatchFailed(selectedFabric.id)} />
+              {failedSwatches.has(selectedFabric.id) || !selectedFabric.swatchImageUrl ? (
+                <div
+                  className="swatch-fallback review-swatch-fallback"
+                  style={{ backgroundColor: safeHex(selectedFabric.colourHex) }}
+                  role="img"
+                  aria-label={`Image unavailable for ${selectedFabric.name}. Approximate colour ${selectedFabric.mainColour}.`}
+                >
+                  <span>Image unavailable. Colour shown is approximate.</span>
+                </div>
+              ) : (
+                <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name} live fabric swatch`} onError={() => markSwatchFailed(selectedFabric.id)} />
+              )}
               <div><span className="eyebrow">Selected fabric</span><strong>{selectedFabric.name}</strong><small>{selectedFabric.id} · {selectedFabric.stockStatus}</small></div>
             </div>
           </div>
           <div className="ai-panel">
+            <FurniturePredictionPanel />
             <span className="eyebrow">AI preview status</span>
             <h2>{localPhoto ? "Create an indicative preview" : "Add a photo to create a preview"}</h2>
             <p id="ai-blocked">
-              Your furniture choice was handled in Step 2. The secure Render service now uses OpenAI to apply the selected live Cloudinary swatch. Results can alter details and are not a finished-work guarantee.
+              The AI service can apply your selected fabric to the furniture photo. The result is an indicative prediction, may alter details and is not a finished-work guarantee.
             </p>
             {localPhoto ? (
               <>
@@ -1195,7 +1401,7 @@ export function Visualiser() {
                   type="button"
                   disabled={previewStatus === "generating"}
                   aria-describedby="ai-blocked preview-guidance"
-                  onClick={() => void createIndicativePreview(true)}
+                  onClick={() => void createIndicativePreview(Boolean(furnitureSelectionOverride))}
                 >
                   {previewStatus === "generating" ? "Creating preview…" : "Create indicative preview"}
                 </button>
@@ -1211,7 +1417,7 @@ export function Visualiser() {
             {previewStatus === "generating" ? (
               <div className="preview-status" role="status" aria-live="polite">
                 <span className="status-dot status-dot-loading" aria-hidden="true" />
-                <span>Creating your indicative preview securely. Keep this page open.</span>
+                <span>Creating an indicative AI preview. This can take up to two minutes.</span>
               </div>
             ) : null}
             {previewStatus === "error" && previewError ? (
@@ -1238,6 +1444,24 @@ export function Visualiser() {
   }
 
   function renderResult() {
+    if (!storageReady || liveStatus === "loading") {
+      return (
+        <section className="narrow-section" aria-labelledby="result-heading">
+          <h1 id="result-heading" tabIndex={-1} ref={mainHeadingRef}>Indicative estimate</h1>
+          <LiveDataPanel />
+        </section>
+      );
+    }
+
+    if (liveStatus === "error") {
+      return (
+        <section className="narrow-section" aria-labelledby="result-heading">
+          <h1 id="result-heading" tabIndex={-1} ref={mainHeadingRef}>Indicative estimate</h1>
+          <LiveDataPanel />
+        </section>
+      );
+    }
+
     if (!selectedFurniture || !selectedFabric || !estimate) {
       return (
         <section className="narrow-section" aria-labelledby="result-heading">
@@ -1275,8 +1499,8 @@ export function Visualiser() {
             ) : (
               <div className="direction-images">
                 {localPhoto ? <img src={localPhoto.url} alt="Your uploaded furniture photograph" /> : <div className="no-photo-small">No photo selected</div>}
-                {failedSwatches.has(selectedFabric.id) ? (
-                  <div className="swatch-fallback" style={{ backgroundColor: safeHex(selectedFabric.colourHex) }} role="img" aria-label={`Image unavailable for ${selectedFabric.name}`}><span>Image unavailable</span></div>
+                {failedSwatches.has(selectedFabric.id) || !selectedFabric.swatchImageUrl ? (
+                  <div className="swatch-fallback" style={{ backgroundColor: safeHex(selectedFabric.colourHex) }} role="img" aria-label={`Image unavailable for ${selectedFabric.name}. Approximate colour ${selectedFabric.mainColour}.`}><span>Image unavailable. Colour shown is approximate.</span></div>
                 ) : (
                   <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name}, ${selectedFabric.mainColour}, ${selectedFabric.pattern} fabric swatch`} onError={() => markSwatchFailed(selectedFabric.id)} />
                 )}
@@ -1286,7 +1510,7 @@ export function Visualiser() {
             <h2>{selectedFurniture.name} in {selectedFabric.name}</h2>
             <p>{selectedFabric.pattern} · {selectedFabric.material} · {selectedFabric.stockStatus}</p>
             <div className="disclosure-box">
-              <strong>{generatedPreview ? "AI image created." : "No AI image was created."}</strong>
+              <strong>{generatedPreview ? "AI prediction — check before relying on it." : "No AI image was created."}</strong>
               <p>
                 {generatedPreview
                   ? "The preview may alter furniture or room details. Confirm colour, texture and pattern scale with a physical swatch and professional inspection."
@@ -1298,6 +1522,10 @@ export function Visualiser() {
             <span className="eyebrow">Indicative estimate</span>
             <p className="estimate-range">{currency.format(estimate.low)} <span>to</span> {currency.format(estimate.high)}</p>
             <dl className="price-breakdown">
+              <div><dt>Furniture used for estimate</dt><dd>{selectedFurniture.name}</dd></div>
+              {furniturePhotoClassification ? (
+                <div><dt>AI prediction from photo</dt><dd>{furniturePhotoClassification.status === "uncertain" ? "Unclear — check manually" : `${furniturePhotoClassification.detectedFurnitureType} — prediction only`}</dd></div>
+              ) : null}
               <div><dt>Quantity</dt><dd>{quantity}</dd></div>
               <div><dt>Starting labour per item</dt><dd>{currency.format(selectedFurniture.labourCost)}</dd></div>
               <div><dt>Live fabric price</dt><dd>{currency.format(selectedFabric.pricePerMetre)} / metre</dd></div>
@@ -1305,6 +1533,9 @@ export function Visualiser() {
               <div><dt>Indicative turnaround</dt><dd>{selectedFurniture.minTurnaroundWeeks} to {selectedFurniture.maxTurnaroundWeeks} weeks</dd></div>
             </dl>
             <div className="estimate-note"><strong>Inspection note</strong><p>{selectedFurniture.specialConsiderations}</p></div>
+            {furnitureSelectionOverride ? (
+              <div className="estimate-note estimate-note-warning"><strong>Furniture types do not match</strong><p>The AI predicted {furnitureSelectionOverride.aiPrediction}; this estimate uses your selection, {furnitureSelectionOverride.customerSelection}.</p></div>
+            ) : null}
             <p className="fine-print">Repairs, replacement fillings, specialist finishes, transport, taxes, additional pattern matching and work found during inspection are excluded.</p>
             <p className="estimate-disclaimer"><strong>This is not a quotation.</strong> Upholstery Hub must inspect the furniture and approve the fabric before confirming price and turnaround.</p>
           </div>
@@ -1329,26 +1560,51 @@ export function Visualiser() {
       year: "numeric",
     }).format(new Date());
 
+    if (!storageReady || liveStatus === "loading") {
+      return (
+        <section className="narrow-section" aria-labelledby="quote-heading">
+          <span className="eyebrow">Your project summary</span>
+          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>Review and save your project summary</h1>
+          <LiveDataPanel />
+        </section>
+      );
+    }
+
+    if (liveStatus === "error" || !catalogue) {
+      return (
+        <section className="narrow-section" aria-labelledby="quote-heading">
+          <span className="eyebrow">Your project summary</span>
+          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>Review and save your project summary</h1>
+          <LiveDataPanel />
+        </section>
+      );
+    }
+
+    if (!hasCompleteSummary) {
+      return (
+        <section className="narrow-section" aria-labelledby="quote-heading">
+          <span className="eyebrow">Your project summary</span>
+          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>Review and save your project summary</h1>
+          <div className="state-panel state-panel-warning" role="status">
+            <span className="status-dot status-dot-warning" aria-hidden="true" />
+            <div>
+              <strong>Complete a live selection first</strong>
+              <p>Choose a furniture type and fabric to create a printable project summary.</p>
+              <button className="button button-dark" type="button" onClick={() => go("photo")}>Start visualising</button>
+            </div>
+          </div>
+        </section>
+      );
+    }
+
     return (
       <section className="quote-layout" aria-labelledby="quote-heading">
         <div className="summary-controls">
-          <span className="eyebrow">Professional next step</span>
-          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>View &amp; save your project summary</h1>
+          <span className="eyebrow">Your project summary</span>
+          <h1 id="quote-heading" tabIndex={-1} ref={mainHeadingRef}>Review and save your project summary</h1>
           <p className="lede">
-            Add an optional note, then print this page or choose “Save as PDF” in your browser’s print window.
+            Review your selections, add optional notes, then print or save a PDF to bring to Upholstery Hub.
           </p>
-          {!hasCompleteSummary ? (
-            <div className="state-panel state-panel-warning" role="status">
-              <span className="status-dot status-dot-warning" aria-hidden="true" />
-              <div>
-                <strong>Complete a live selection first</strong>
-                <p>Choose a furniture type and fabric to create a printable project summary.</p>
-                <button className="button button-dark" type="button" onClick={() => go("photo")}>
-                  Start visualising
-                </button>
-              </div>
-            </div>
-          ) : null}
           <div className="notes-field">
             <label htmlFor="customer-notes"><strong>Notes for your consultation</strong> <small>Optional</small></label>
             <textarea
@@ -1376,8 +1632,8 @@ export function Visualiser() {
           </button>
           <p className="field-help">In the print window, select “Save as PDF” to download a copy.</p>
           <div className="page-actions page-actions-left">
-            {estimate ? <button className="button button-light" type="button" onClick={() => go("result")}>Back to estimate</button> : null}
-            <button className="button button-light" type="button" onClick={resetJourney}>Start a new selection</button>
+            {estimate ? <button className="button button-light" type="button" onClick={() => go("furniture")}>Edit selections</button> : null}
+            <button className="button button-light" type="button" onClick={(event) => requestJourneyReset(event.currentTarget)}>Start again</button>
           </div>
         </div>
         <aside className="quote-summary" aria-label="Printable project summary">
@@ -1395,27 +1651,52 @@ export function Visualiser() {
             </figure>
           ) : selectedFabric ? (
             <figure className="summary-media summary-media-swatch">
-              <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name} live fabric swatch`} />
+              {failedSwatches.has(selectedFabric.id) || !selectedFabric.swatchImageUrl ? (
+                <div
+                  className="swatch-fallback summary-swatch-fallback"
+                  style={{ backgroundColor: safeHex(selectedFabric.colourHex) }}
+                  role="img"
+                  aria-label={`Image unavailable for ${selectedFabric.name}. Approximate colour ${selectedFabric.mainColour}.`}
+                >
+                  <span>Image unavailable. Colour shown is approximate.</span>
+                </div>
+              ) : (
+                <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name} live fabric swatch`} onError={() => markSwatchFailed(selectedFabric.id)} />
+              )}
               <figcaption>Selected live fabric swatch</figcaption>
             </figure>
           ) : null}
-          <h2>Your selected direction</h2>
+          <h2>Your selection and price summary</h2>
           <dl>
-            <div><dt>Furniture</dt><dd>{selectedFurniture ? `${selectedFurniture.name} × ${quantity}` : "Not selected"}</dd></div>
+            <div><dt>Furniture used for estimate</dt><dd>{selectedFurniture ? `${selectedFurniture.name} × ${quantity}` : "Not selected"}</dd></div>
+            {furniturePhotoClassification ? (
+              <div><dt>AI prediction from photo</dt><dd>{furniturePhotoClassification.status === "uncertain" ? "Unclear — check manually" : `${furniturePhotoClassification.detectedFurnitureType} — prediction only`}</dd></div>
+            ) : null}
             <div><dt>Fabric</dt><dd>{selectedFabric ? `${selectedFabric.name} (${selectedFabric.id})` : "Not selected"}</dd></div>
             <div><dt>Pattern and material</dt><dd>{selectedFabric ? `${selectedFabric.pattern} · ${selectedFabric.material}` : "Not selected"}</dd></div>
             <div><dt>Stock status</dt><dd>{selectedFabric?.stockStatus ?? "Unavailable"}</dd></div>
-            <div><dt>Estimate</dt><dd>{estimate ? `${currency.format(estimate.low)} to ${currency.format(estimate.high)}` : "Unavailable"}</dd></div>
+            <div><dt>Indicative estimate</dt><dd>{estimate ? `${currency.format(estimate.low)} to ${currency.format(estimate.high)}` : "Unavailable"}</dd></div>
             <div><dt>Estimated fabric</dt><dd>{selectedFurniture ? `${selectedFurniture.minMetres} to ${selectedFurniture.maxMetres} m per item` : "Unavailable"}</dd></div>
             <div><dt>Indicative turnaround</dt><dd>{selectedFurniture ? `${selectedFurniture.minTurnaroundWeeks} to ${selectedFurniture.maxTurnaroundWeeks} weeks` : "Unavailable"}</dd></div>
             <div><dt>AI preview</dt><dd>{generatedPreview ? "Generated — indicative only" : "Not generated"}</dd></div>
+            <div><dt>Catalogue checked</dt><dd>{catalogue ? lastUpdatedLabel(catalogue.fetchedAt) : "Unavailable"}</dd></div>
           </dl>
+          {furnitureSelectionOverride ? (
+            <div className="summary-warning">
+              <strong>Furniture types do not match</strong>
+              <p>The AI predicted {furnitureSelectionOverride.aiPrediction}; this estimate uses your selection, {furnitureSelectionOverride.customerSelection}.</p>
+            </div>
+          ) : null}
           {customerNotes.trim() ? (
             <div className="summary-notes">
               <strong>Consultation notes</strong>
               <p>{customerNotes.trim()}</p>
             </div>
           ) : null}
+          <div className="summary-exclusions">
+            <strong>Estimate exclusions</strong>
+            <p>Repairs, replacement fillings, specialist finishes, transport, taxes, additional pattern matching and work found during inspection are excluded.</p>
+          </div>
           <div className="summary-disclaimer">
             <strong>This project summary is not a quotation.</strong>
             <p>
@@ -1434,14 +1715,19 @@ export function Visualiser() {
       <header className="app-header">
         <a className="brand-link" href="#/start" aria-label="Upholstery Hub home" onClick={(event) => {
           event.preventDefault();
-          resetJourneyFromLogo();
+          goHome();
         }}>
           <picture>
             <source media="(max-width: 480px)" srcSet="branding/UpholsteryHubIcon.png" />
             <img className="brand-logo" src="branding/UpholsteryHubLogo-Horizontal.png" alt="" />
           </picture>
         </a>
-        <span className="pilot-chip">Customer pilot</span>
+        <div className="header-actions">
+          {step !== "start" ? (
+            <button className="text-button" type="button" onClick={goHome}>Home</button>
+          ) : null}
+          <span className="pilot-chip">Customer pilot</span>
+        </div>
       </header>
 
       <div className="demo-banner" role="note">
@@ -1481,12 +1767,32 @@ export function Visualiser() {
           <strong>Upholstery Hub Fabric Visualiser</strong>
           <p>Indicative decision support for a professional upholstery conversation.</p>
         </div>
-        <div className="footer-status">
-          <span>Live source: Google Sheets</span>
-          <span>AI service: OpenAI through Render</span>
-          <span>Quote route: Awaiting verification</span>
-        </div>
+        <p className="footer-status">Prototype demonstration. No account required.</p>
       </footer>
+
+      <dialog
+        className="reset-dialog"
+        ref={resetDialogRef}
+        aria-labelledby="reset-dialog-title"
+        aria-describedby="reset-dialog-description"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelJourneyReset();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            cancelJourneyReset();
+          }
+        }}
+      >
+        <h2 id="reset-dialog-title">Start again?</h2>
+        <p id="reset-dialog-description">This will remove your photo, furniture, fabric, AI preview and project notes from this browser.</p>
+        <div className="reset-dialog-actions">
+          <button className="button button-light" type="button" ref={resetSafeButtonRef} onClick={cancelJourneyReset}>Keep my progress</button>
+          <button className="button button-danger" type="button" onClick={confirmJourneyReset}>Start again</button>
+        </div>
+      </dialog>
     </div>
   );
 }

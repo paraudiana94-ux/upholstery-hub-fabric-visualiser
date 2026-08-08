@@ -164,6 +164,25 @@ function parseRequiredNumber(value: string, field: string, id: string): number {
   return number;
 }
 
+function parseRequiredText(value: string, field: string, rowLabel: string): string {
+  const cleaned = value.trim();
+  if (!cleaned) {
+    throw new Error(`${rowLabel} has a missing ${field} value.`);
+  }
+  return cleaned;
+}
+
+function liveCloudinarySwatchUrl(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === "https:" && url.hostname === "res.cloudinary.com"
+      ? url.href
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 export function parseCatalogueCsv(
   fabricCsv: string,
   furnitureCsv: string,
@@ -180,9 +199,9 @@ export function parseCatalogueCsv(
 
   const fabrics = fabricRecords
     .filter((record) => parseBoolean(record.Active))
-    .map((record) => ({
-      id: record["Fabric ID"],
-      name: record["Fabric Name"],
+    .map((record, index) => ({
+      id: parseRequiredText(record["Fabric ID"], "Fabric ID", `Fabric row ${index + 1}`),
+      name: parseRequiredText(record["Fabric Name"], "Fabric Name", record["Fabric ID"] || `Fabric row ${index + 1}`),
       collection: record.Collection,
       mainColour: record["Main Colour"],
       colourHex: record["Colour Hex"],
@@ -194,19 +213,19 @@ export function parseCatalogueCsv(
         record["Fabric ID"],
       ),
       suitableFurnitureTypes: record["Suitable Furniture Types"],
-      stockStatus: record["Stock Status"],
+      stockStatus: parseRequiredText(record["Stock Status"], "Stock Status", record["Fabric ID"]),
       active: true,
       demoData: parseBoolean(record["Demo Data"]),
       lastUpdated: record["Last Updated"],
-      swatchImageUrl: record["Swatch Image URL"],
+      swatchImageUrl: liveCloudinarySwatchUrl(record["Swatch Image URL"]),
     }))
     .sort((a, b) => a.name.localeCompare(b.name, "en-IE"));
 
   const furniture = furnitureRecords
     .filter((record) => parseBoolean(record.Active))
-    .map((record) => ({
-      id: record["Furniture Type ID"],
-      name: record["Furniture Type"],
+    .map((record, index) => ({
+      id: parseRequiredText(record["Furniture Type ID"], "Furniture Type ID", `Furniture row ${index + 1}`),
+      name: parseRequiredText(record["Furniture Type"], "Furniture Type", record["Furniture Type ID"] || `Furniture row ${index + 1}`),
       minMetres: parseRequiredNumber(
         record["Min Estimated Metres"],
         "minimum metres",
