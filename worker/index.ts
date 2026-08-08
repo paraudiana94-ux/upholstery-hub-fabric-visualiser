@@ -5,9 +5,15 @@ import {
 } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import { fetchPublishedCatalogue, SHEET_URL } from "../lib/catalogue";
+import {
+  createPreview,
+  getPreviewOptions,
+  getPreviewStatus,
+} from "./preview";
 
 interface Env {
   ASSETS: Fetcher;
+  OPENAI_API_KEY?: string;
   IMAGES: {
     input(stream: ReadableStream): {
       transform(options: Record<string, unknown>): {
@@ -70,6 +76,32 @@ const worker = {
         });
       }
       return getCatalogueResponse();
+    }
+
+    if (url.pathname === "/api/preview/status") {
+      if (request.method === "OPTIONS") {
+        return getPreviewOptions(request);
+      }
+      if (request.method !== "GET") {
+        return new Response("Method not allowed", {
+          status: 405,
+          headers: { allow: "GET, OPTIONS" },
+        });
+      }
+      return getPreviewStatus(request, env);
+    }
+
+    if (url.pathname === "/api/preview") {
+      if (request.method === "OPTIONS") {
+        return getPreviewOptions(request);
+      }
+      if (request.method !== "POST") {
+        return new Response("Method not allowed", {
+          status: 405,
+          headers: { allow: "POST, OPTIONS" },
+        });
+      }
+      return createPreview(request, env);
     }
 
     if (url.pathname === "/_vinext/image") {

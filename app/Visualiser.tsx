@@ -28,6 +28,21 @@ interface LocalPhoto {
   url: string;
   name: string;
   size: number;
+  file: File;
+}
+
+interface GeneratedPreview {
+  imageDataUrl: string;
+  model: string;
+  generatedAt: string;
+  disclaimer: string;
+}
+
+type PreviewStatus = "idle" | "generating" | "ready" | "error";
+
+interface PreviewErrorPayload {
+  code?: string;
+  message?: string;
 }
 
 const steps: Step[] = [
@@ -117,6 +132,10 @@ export function Visualiser() {
   const [failedSwatches, setFailedSwatches] = useState<Set<string>>(new Set());
   const [formError, setFormError] = useState("");
   const [aiAcknowledged, setAiAcknowledged] = useState(false);
+  const [previewStatus, setPreviewStatus] = useState<PreviewStatus>("idle");
+  const [generatedPreview, setGeneratedPreview] =
+    useState<GeneratedPreview | null>(null);
+  const [previewError, setPreviewError] = useState("");
   const [reconciliationNotice, setReconciliationNotice] = useState("");
 
   const mainHeadingRef = useRef<HTMLHeadingElement>(null);
@@ -292,13 +311,20 @@ export function Visualiser() {
     window.requestAnimationFrame(() => errorSummaryRef.current?.focus());
   }
 
+  function clearGeneratedPreview() {
+    setGeneratedPreview(null);
+    setPreviewStatus("idle");
+    setPreviewError("");
+    setAiAcknowledged(false);
+  }
+
   function removePhoto() {
     if (localPhoto) {
       URL.revokeObjectURL(localPhoto.url);
     }
     setLocalPhoto(null);
     setPhotoError("");
-    setAiAcknowledged(false);
+    clearGeneratedPreview();
     setPhotoInputKey((current) => current + 1);
   }
 
@@ -329,11 +355,69 @@ export function Visualiser() {
       if (localPhoto) {
         URL.revokeObjectURL(localPhoto.url);
       }
-      setLocalPhoto({ url: objectUrl, name: file.name, size: file.size });
-      setAiAcknowledged(false);
+      setLocalPhoto({ url: objectUrl, name: file.name, size: file.size, file });
+      clearGeneratedPreview();
     } catch {
       URL.revokeObjectURL(objectUrl);
       setPhotoError("We could not read this photo. Try another image.");
+    }
+  }
+
+  async function createIndicativePreview() {
+    if (!localPhoto || !selectedFabric || !selectedFurniture || !aiAcknowledged) {
+      setPreviewStatus("error");
+      setPreviewError(
+        "Add a photo, complete both live selections and confirm the consent statement before generating.",
+      );
+      return;
+    }
+
+    setPreviewStatus("generating");
+    setPreviewError("");
+    setGeneratedPreview(null);
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 130_000);
+    const endpoint = window.location.hostname.endsWith("github.io")
+      ? "https://upholstery-hub-fabric-visualiser.onrender.com/api/preview"
+      : "/api/preview";
+    const body = new FormData();
+    body.append("photo", localPhoto.file, localPhoto.name);
+    body.append("fabricId", selectedFabric.id);
+    body.append("furnitureId", selectedFurniture.id);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        body,
+        signal: controller.signal,
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | GeneratedPreview
+        | PreviewErrorPayload
+        | null;
+      if (!response.ok || !payload || !("imageDataUrl" in payload)) {
+        throw new Error(
+          payload && "message" in payload && payload.message
+            ? payload.message
+            : "The AI preview could not be created. Your estimate is still available.",
+        );
+      }
+
+      setGeneratedPreview(payload);
+      setPreviewStatus("ready");
+      go("result");
+    } catch (error) {
+      setPreviewStatus("error");
+      setPreviewError(
+        error instanceof DOMException && error.name === "AbortError"
+          ? "The AI preview took too long. Please try again; your selections remain available."
+          : error instanceof Error
+            ? error.message
+            : "The AI preview could not be created. Your estimate is still available.",
+      );
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
 
@@ -484,7 +568,7 @@ export function Visualiser() {
             </button>
           </div>
           <p className="trust-line">
-            <span aria-hidden="true">✓</span> No account required. Selecting a photograph does not send it anywhere.
+            <span aria-hidden="true">✓</span> No account required. Selecting a photograph keeps it local until you consent and request an AI preview.
           </p>
         </div>
         <div className="process-card" aria-label="How the prototype works">
@@ -527,7 +611,7 @@ export function Visualiser() {
           </p>
           <div className="privacy-note">
             <strong>Selecting a photo does not send it anywhere.</strong>
-            <p>The file stays in this browser session. You can remove it at any time.</p>
+            <p>The file stays in this browser session until you explicitly consent and press “Create indicative preview”. You can remove it at any time.</p>
           </div>
         </div>
         <div className="step-card">
@@ -552,7 +636,7 @@ export function Visualiser() {
               <img src={localPhoto.url} alt="Your uploaded furniture photograph" />
               <div>
                 <strong>{localPhoto.name}</strong>
-                <span>{fileSize(localPhoto.size)} · Local only</span>
+                <span>{fileSize(localPhoto.size)} · Not sent</span>
                 <button className="text-button text-button-danger" type="button" onClick={removePhoto}>
                   Remove photo
                 </button>
@@ -597,6 +681,7 @@ export function Visualiser() {
                     checked={selectedFurnitureId === item.id}
                     onChange={() => {
                       setSelectedFurnitureId(item.id);
+                      clearGeneratedPreview();
                       setFormError("");
                     }}
                   />
@@ -690,6 +775,7 @@ export function Visualiser() {
                         checked={selectedFabricId === fabric.id}
                         onChange={() => {
                           setSelectedFabricId(fabric.id);
+                          clearGeneratedPreview();
                           setFormError("");
                         }}
                       />
@@ -793,27 +879,65 @@ export function Visualiser() {
           </div>
           <div className="ai-panel">
             <span className="eyebrow">AI preview status</span>
-            <h2>Preview service not connected</h2>
+            <h2>{localPhoto ? "Create an indicative preview" : "Add a photo to create a preview"}</h2>
             <p id="ai-blocked">
-              No image service, secure processing boundary or photograph-retention policy has been approved. This prototype will not send your photo or pretend that a preview was created.
+              The secure Render service uses OpenAI to apply the selected live Cloudinary swatch to your furniture photo. Results can alter details and are not a finished-work guarantee.
             </p>
             {localPhoto ? (
-              <label className="acknowledgement">
-                <input type="checkbox" checked={aiAcknowledged} onChange={(event) => setAiAcknowledged(event.target.checked)} />
-                <span>I understand that any future AI preview would be indicative and I have permission to use this photograph.</span>
-              </label>
+              <>
+                <label className="acknowledgement">
+                  <input
+                    type="checkbox"
+                    checked={aiAcknowledged}
+                    disabled={previewStatus === "generating"}
+                    onChange={(event) => setAiAcknowledged(event.target.checked)}
+                  />
+                  <span>
+                    I have permission to use this photo and agree to send it, plus the selected public fabric swatch, to Upholstery Hub’s Render service and OpenAI to generate an indicative preview. OpenAI may retain API abuse-monitoring content for up to 30 days.
+                  </span>
+                </label>
+                <button
+                  className="button button-dark button-full"
+                  type="button"
+                  disabled={!aiAcknowledged || previewStatus === "generating"}
+                  aria-describedby="ai-blocked preview-guidance"
+                  onClick={() => void createIndicativePreview()}
+                >
+                  {previewStatus === "generating" ? "Creating preview…" : "Create indicative preview"}
+                </button>
+                <p id="preview-guidance" className="field-help">
+                  Generation may take up to two minutes. This prototype limits each visitor to three previews per hour.
+                </p>
+              </>
+            ) : (
+              <button className="button button-light button-full" type="button" onClick={() => go("photo")}>
+                Add a furniture photo
+              </button>
+            )}
+            {previewStatus === "generating" ? (
+              <div className="preview-status" role="status" aria-live="polite">
+                <span className="status-dot status-dot-loading" aria-hidden="true" />
+                <span>Creating your indicative preview securely. Keep this page open.</span>
+              </div>
             ) : null}
-            <button className="button button-disabled" type="button" disabled aria-describedby="ai-blocked">
-              Create indicative preview
-            </button>
-            <p className="field-help">External transmission is blocked until the Manager approves the service and policy.</p>
-            <button className="button button-dark button-full" type="button" onClick={() => go("result")}>
+            {previewStatus === "error" && previewError ? (
+              <div className="preview-status preview-status-error" role="alert">
+                <span className="status-dot status-dot-error" aria-hidden="true" />
+                <span>{previewError}</span>
+              </div>
+            ) : null}
+            <button
+              className="button button-light button-full"
+              type="button"
+              disabled={previewStatus === "generating"}
+              onClick={() => go("result")}
+            >
               Continue without an AI preview
             </button>
           </div>
         </div>
         <div className="page-actions">
-          <button className="button button-quiet" type="button" onClick={() => go("fabrics")}>Back to fabrics</button>
+          <button className="button button-quiet" type="button" onClick={() => go("fabrics")} disabled={previewStatus === "generating"}>Back to fabrics</button>
         </div>
       </section>
     );
@@ -848,20 +972,32 @@ export function Visualiser() {
         </div>
         <div className="result-grid">
           <div className="direction-card">
-            <div className="direction-images">
-              {localPhoto ? <img src={localPhoto.url} alt="Your uploaded furniture photograph" /> : <div className="no-photo-small">No photo selected</div>}
-              {failedSwatches.has(selectedFabric.id) ? (
-                <div className="swatch-fallback" style={{ backgroundColor: safeHex(selectedFabric.colourHex) }} role="img" aria-label={`Image unavailable for ${selectedFabric.name}`}><span>Image unavailable</span></div>
-              ) : (
-                <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name}, ${selectedFabric.mainColour}, ${selectedFabric.pattern} fabric swatch`} onError={() => markSwatchFailed(selectedFabric.id)} />
-              )}
-            </div>
-            <span className="eyebrow">Selected direction, not an AI preview</span>
+            {generatedPreview ? (
+              <img
+                className="generated-preview-image"
+                src={generatedPreview.imageDataUrl}
+                alt={`AI-generated indicative preview of ${selectedFurniture.name} in ${selectedFabric.name}`}
+              />
+            ) : (
+              <div className="direction-images">
+                {localPhoto ? <img src={localPhoto.url} alt="Your uploaded furniture photograph" /> : <div className="no-photo-small">No photo selected</div>}
+                {failedSwatches.has(selectedFabric.id) ? (
+                  <div className="swatch-fallback" style={{ backgroundColor: safeHex(selectedFabric.colourHex) }} role="img" aria-label={`Image unavailable for ${selectedFabric.name}`}><span>Image unavailable</span></div>
+                ) : (
+                  <img src={selectedFabric.swatchImageUrl} alt={`${selectedFabric.name}, ${selectedFabric.mainColour}, ${selectedFabric.pattern} fabric swatch`} onError={() => markSwatchFailed(selectedFabric.id)} />
+                )}
+              </div>
+            )}
+            <span className="eyebrow">{generatedPreview ? "AI-generated indicative preview" : "Selected direction, not an AI preview"}</span>
             <h2>{selectedFurniture.name} in {selectedFabric.name}</h2>
             <p>{selectedFabric.pattern} · {selectedFabric.material} · {selectedFabric.stockStatus}</p>
             <div className="disclosure-box">
-              <strong>No AI image was created.</strong>
-              <p>The photo and live swatch are shown separately. Screen colour, texture and pattern scale may differ.</p>
+              <strong>{generatedPreview ? "AI image created." : "No AI image was created."}</strong>
+              <p>
+                {generatedPreview
+                  ? "The preview may alter furniture or room details. Confirm colour, texture and pattern scale with a physical swatch and professional inspection."
+                  : "The photo and live swatch are shown separately. Screen colour, texture and pattern scale may differ."}
+              </p>
             </div>
           </div>
           <div className="estimate-card">
@@ -881,7 +1017,10 @@ export function Visualiser() {
         </div>
         <div className="page-actions page-actions-prominent">
           <button className="button button-dark button-large" type="button" onClick={() => go("quote")}>Request a professional quote</button>
-          <button className="button button-light" type="button" onClick={() => go("fabrics")}>Try another fabric</button>
+          <button className="button button-light" type="button" onClick={() => {
+            clearGeneratedPreview();
+            go("fabrics");
+          }}>Try another fabric</button>
           <button className="button button-quiet" type="button" onClick={() => go("photo")}>Change photo</button>
         </div>
       </section>
@@ -914,7 +1053,7 @@ export function Visualiser() {
             <div><dt>Furniture</dt><dd>{selectedFurniture ? `${selectedFurniture.name} × ${quantity}` : "Not selected"}</dd></div>
             <div><dt>Fabric</dt><dd>{selectedFabric ? `${selectedFabric.name} (${selectedFabric.id})` : "Not selected"}</dd></div>
             <div><dt>Estimate</dt><dd>{estimate ? `${currency.format(estimate.low)} to ${currency.format(estimate.high)}` : "Unavailable"}</dd></div>
-            <div><dt>AI preview</dt><dd>Not generated</dd></div>
+            <div><dt>AI preview</dt><dd>{generatedPreview ? "Generated — indicative only" : "Not generated"}</dd></div>
           </dl>
           <p>This summary remains in this browser session. It has not been submitted anywhere.</p>
         </aside>
@@ -977,7 +1116,7 @@ export function Visualiser() {
         </div>
         <div className="footer-status">
           <span>Live source: Google Sheets</span>
-          <span>AI service: Not connected</span>
+          <span>AI service: OpenAI through Render</span>
           <span>Quote route: Awaiting verification</span>
         </div>
       </footer>
