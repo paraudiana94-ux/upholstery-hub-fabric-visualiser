@@ -266,7 +266,9 @@ export function parseCatalogueCsv(
 }
 
 async function fetchPublishedCsv(url: string, sheetName: string): Promise<string> {
-  const response = await fetch(url, {
+  const liveUrl = new URL(url);
+  liveUrl.searchParams.set("refresh", Date.now().toString());
+  const response = await fetch(liveUrl, {
     headers: { accept: "text/csv" },
     cache: "no-store",
   });
