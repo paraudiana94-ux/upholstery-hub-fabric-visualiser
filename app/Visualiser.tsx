@@ -9,6 +9,10 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  fetchPublishedCatalogue,
+  type CataloguePayload,
+} from "@/lib/catalogue";
 import { calculateIndicativeEstimate } from "@/lib/pricing";
 
 type Step =
@@ -19,46 +23,6 @@ type Step =
   | "review"
   | "result"
   | "quote";
-
-interface Fabric {
-  id: string;
-  name: string;
-  collection: string;
-  mainColour: string;
-  colourHex: string;
-  pattern: string;
-  material: string;
-  pricePerMetre: number;
-  suitableFurnitureTypes: string;
-  stockStatus: string;
-  active: boolean;
-  demoData: boolean;
-  lastUpdated: string;
-  swatchImageUrl: string;
-}
-
-interface FurnitureType {
-  id: string;
-  name: string;
-  minMetres: number;
-  maxMetres: number;
-  labourCost: number;
-  minTurnaroundWeeks: number;
-  maxTurnaroundWeeks: number;
-  specialConsiderations: string;
-  active: boolean;
-  demoData: boolean;
-  lastUpdated: string;
-}
-
-interface CataloguePayload {
-  source: string;
-  sourceUrl: string;
-  spreadsheetId: string;
-  fetchedAt: string;
-  fabrics: Fabric[];
-  furniture: FurnitureType[];
-}
 
 interface LocalPhoto {
   url: string;
@@ -166,9 +130,9 @@ export function Visualiser() {
         typeof window !== "undefined" &&
         window.location.hostname.endsWith("github.io")
       ) {
-        throw new Error(
-          "This GitHub Pages preview cannot run the live catalogue server. The source remains Google Sheets, and no stored rows have been substituted.",
-        );
+        setCatalogue(await fetchPublishedCatalogue());
+        setLiveStatus("ready");
+        return;
       }
       const response = await fetch("/api/catalogue", {
         cache: "no-store",

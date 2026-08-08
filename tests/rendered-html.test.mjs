@@ -47,12 +47,18 @@ test("catalogue route queries both live tabs and filters inactive rows", async (
   const requested = [];
 
   const fabrics = [
+    '"Fabrics Catalogue",,,,,,,,,,,,,,,,,,',
+    '"All initial rows are demonstration data.",,,,,,,,,,,,,,,,,,',
+    '"Fabric records","Fabric records",,"Active fabrics","Active fabrics",,,,,,,,,,,,,,',
+    '"12",,"11",,,,,,,,,,,,,,,,',
     '"Fabric ID","Fabric Name","Collection","Swatch Preview","Main Colour","Colour Hex","Pattern","Material","Price per Metre (€)","Fabric Width (cm)","Martindale Rating","Suitable Furniture Types","Stock Status","Supplier Lead Time (days)","Cleaning Instructions","Active","Demo Data","Last Updated","Swatch Image URL"',
     '"F001","Test Linen","Demo","","Sand","#D7C4A3","Plain","Blend","28","140","30000","Armchair","In Stock","5","Care","TRUE","TRUE","2026-08-06","https://res.cloudinary.com/example/F001.jpg"',
     '"F099","Inactive Fabric","Demo","","Grey","#666666","Plain","Blend","20","140","30000","Armchair","Out of Stock","5","Care","FALSE","TRUE","2026-08-06","https://res.cloudinary.com/example/F099.jpg"',
   ].join("\n");
 
   const furniture = [
+    '"Furniture Pricing Assumptions",,,,,,,,,,',
+    '"Demonstration quantities, labour costs and turnaround ranges.",,,,,,,,,,',
     '"Furniture Type ID","Furniture Type","Min Estimated Metres","Max Estimated Metres","Starting Labour Cost (€)","Min Turnaround Weeks","Max Turnaround Weeks","Special Considerations","Active","Demo Data","Last Updated"',
     '"FT002","Armchair","5","7","550","4","6","Inspection required","TRUE","TRUE","2026-08-06"',
   ].join("\n");
@@ -60,7 +66,7 @@ test("catalogue route queries both live tabs and filters inactive rows", async (
   globalThis.fetch = async (input) => {
     const url = String(input);
     requested.push(url);
-    return new Response(url.includes("sheet=Fabrics") ? fabrics : furniture, {
+    return new Response(url.includes("gid=441339050") ? fabrics : furniture, {
       status: 200,
       headers: { "content-type": "text/csv; charset=utf-8" },
     });
@@ -76,8 +82,18 @@ test("catalogue route queries both live tabs and filters inactive rows", async (
 
     assert.equal(response.status, 200);
     assert.equal(requested.length, 2);
-    assert.ok(requested.some((url) => url.includes("sheet=Fabrics")));
-    assert.ok(requested.some((url) => url.includes("sheet=FurniturePricing")));
+    assert.ok(
+      requested.some(
+        (url) =>
+          url.includes("/spreadsheets/d/e/2PACX-") && url.includes("gid=441339050"),
+      ),
+    );
+    assert.ok(
+      requested.some(
+        (url) =>
+          url.includes("/spreadsheets/d/e/2PACX-") && url.includes("gid=589043625"),
+      ),
+    );
     assert.equal(payload.fabrics.length, 1);
     assert.equal(payload.fabrics[0].id, "F001");
     assert.equal(payload.fabrics[0].swatchImageUrl, "https://res.cloudinary.com/example/F001.jpg");
