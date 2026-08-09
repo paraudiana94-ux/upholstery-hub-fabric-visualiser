@@ -733,7 +733,7 @@ export async function createPreview(request: Request, env?: PreviewEnv): Promise
   openAIForm.append("image[]", photo, photo.name || "furniture-photo");
   openAIForm.append("image[]", swatch, `${fabric.id}-live-swatch`);
   openAIForm.append("prompt", previewPrompt(furniture.name, fabric.name));
-  openAIForm.append("quality", "low");
+  openAIForm.append("quality", "medium");
   openAIForm.append("size", "1024x1024");
   openAIForm.append("output_format", "jpeg");
   openAIForm.append("output_compression", "82");

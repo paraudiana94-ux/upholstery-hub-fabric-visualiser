@@ -314,7 +314,7 @@ test("preview route resolves live IDs and sends the customer photo plus live Clo
       assert.equal(new Headers(init?.headers).get("authorization"), "Bearer test-key");
       assert.ok(init?.body instanceof FormData);
       assert.equal(init.body.get("model"), "gpt-image-2");
-      assert.equal(init.body.get("quality"), "low");
+      assert.equal(init.body.get("quality"), "medium");
       assert.equal(init.body.getAll("image[]").length, 2);
       assert.match(String(init.body.get("prompt")), /Armchair/);
       assert.match(String(init.body.get("prompt")), /Test Linen/);
